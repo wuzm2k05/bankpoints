@@ -1,6 +1,6 @@
 import operator
 import sqlite3
-from typing import Annotated, List, TypedDict, Dict, Literal, Optional
+from typing import Annotated, List, TypedDict, Dict, Literal, Optional, Any
 from langgraph.checkpoint.memory import MemorySaver
 
 from langchain_openai import ChatOpenAI
@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
+from pydantic import BaseModel, Field, field_validator
 
 import config.config as config
 import config.resource as resource
@@ -17,6 +18,23 @@ import log.logger  as logger
 
 _log = logger.get_logger()
 
+
+class IntentAnalysis(BaseModel):
+  product_keywords: str = Field(description="提取的商品关键词，若无则为空字符串")
+  user_points: int = Field(
+    default=-1, 
+    description="用户明确提到的积分数。若未提到，设为 -1 且必须在 missing_info 中加入'积分数'，严禁返回空字符串或者null。若用户明确说没有积分或只有0分，设为 0。"
+  )
+  missing_info: List[str] = Field(description="缺失的信息项列表")
+  reply: str = Field(description="给用户的追问话术或引导语")
+  
+  @field_validator('user_points', mode='before')
+  @classmethod
+  def handle_empty_points(cls, v: Any) -> Any:
+    # 如果混元返回了空字符串 "" 或 None，强制转为默认值 -1
+    if v == "" or v is None:
+      return -1
+    return v
 
 # --- 1. 定义状态数据结构 ---
 class AgentState(TypedDict):
@@ -41,6 +59,7 @@ class RedemptionAgent:
     
     #self.model = ChatOpenAI(model="gpt-4o", temperature=0)
     self.model = model_factory.get_model()
+    self.structured_llm = self.model.with_structured_output(IntentAnalysis)
     
     # 初始化持久化记忆（使用 SQLite 存储对话状态）
     #conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -58,7 +77,7 @@ class RedemptionAgent:
       ("placeholder", "{chat_history}"),
       ("human", "{input}")
     ])
-    chain = prompt | self.model | JsonOutputParser()
+    chain = prompt | self.structured_llm
     
     last_message = state["messages"][-1].content
     history = state["messages"][:-1]
@@ -68,13 +87,13 @@ class RedemptionAgent:
     _log.debug("previous state: %s", state)
     
     ret = {
-      "product_keywords": res.get("product_keywords", state.get("product_keywords")),
-      "user_points": res.get("user_points") or state.get("user_points", 0),
-      "missing_info": res.get("missing_info", [])
+      "product_keywords": res.product_keywords or state.get("product_keywords"),
+      "user_points": res.user_points or state.get("user_points", 0),
+      "missing_info": res.missing_info
     }
     
-    if res.get("reply") != "":
-      ret["final_recommendation"] = res.get("reply")
+    if res.reply != "":
+      ret["final_recommendation"] = res.reply
      
     return ret
 
