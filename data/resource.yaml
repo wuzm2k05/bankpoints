@@ -1,5 +1,5 @@
 # config/config.yaml
-active_model: "qwen"
+active_model: "hunyuan"
 
 default_values:
   temperature: 0.0
@@ -10,20 +10,21 @@ default_values:
     请结合对话历史和当前输入，提取以下字段：
     1. product_keywords: 最终用于搜索的关键词（如具体的商品、品类或人群）。
     2. search_terms: 当用户意图模糊时，需将其具象化为3个具体的工行礼品关键词以便搜索（如“给爸爸的” -> ['按摩仪', '男士手表', '茶叶']）。
-    2. user_points: 用户持有的积分总数（必须是纯数字）。
+    2. user_points: 用户持有的积分总数。
     3. missing_info: 数组，记录目前【依然缺失】且【必须追问】的信息项（可选值：'积分数', '具体品类'）。
     4. reply: 给用户的回复语。
 
-    ### 意图判断准则（SOP）：
-      **检索价值判定（决定 missing_info）**：
-      - **不具备价值**：仅提到“买东西”、“礼品”、“换点啥”。-> 必须放入 missing_info，并在 reply 中给出 3 个方向（如：数码、食品、家居）。
+    ### 买的商品意图判断准则：
+      **检索价值判定（决定 missing_info中是否含有“具体品类”）**：
+      - **不具备价值**：仅提到“买东西”、“礼品”、“换点啥”。-> 必须将“具体品类”放入 missing_info，并在 reply 中给出 3 个方向（如：数码、食品、家居）。
       - **具备价值但模糊**：提到“给领导的”、“送爸爸的”、“保健品”。
-        - 若这是第一次提到，列入 missing_info 并追问细节（例如：对方的偏好等）。
-        - 若用户不愿意进一步提供信息，如表示“随便”、“没了”、“没有了”、“就这些”或再次询问无果，则清除 missing_info，将此词存入 product_keywords，准备进入搜索。
-      - **具备价值且具体**：提到“按摩椅”、“华为手机”、“保温杯”。-> missing_info 设为 []。
+        - 若这是第一次提到，将“具体品类”放入入 missing_info 并追问细节（例如：对方的偏好等）。
+        - 若用户不愿意进一步提供信息，如表示“随便”、“没了”、“没有了”、“就这些”或再次询问无果，则清除 missing_info中的“具体品类”，将此词存入 product_keywords。
+      - **具备价值且具体**：提到“按摩椅”、“华为手机”、“保温杯”。-> 则清除missing_info 中的“具体品类”。
 
     ### 特别要求：
-    - 只要 missing_info 不为空，reply 必须包含引导性提问。
+    - 对于积分数，如果用户明确提到的积分数则设为相应值。若未提到，设为 -1 且必须在 missing_info 中加入'积分数'，严禁返回空字符串或者null。若用户明确说没有积分或只有0分，设为 0。
+    - 只要 missing_info 不为空，reply 必须包含引导性提问来让用户进一步补充相应的信息。
     - 只要 missing_info 为空，reply 必须为空字符串 ""，以便系统触发自动搜索。
     - 如果missing_info为空，那么必须有product_keywords和user_points的值。
     - 如果product_keywords已经足够精确，就不要填search_terms，保持为空列表 []。
@@ -33,8 +34,12 @@ models:
     type: "hunyuan"
     model_name: "hunyuan-2.0-instruct-20251111"
     base_url: "https://api.hunyuan.cloud.tencent.com/v1"
+    api_key: "sk-N9er2sqJZDxUENhJdAVSHCCMSeS2XM9SlRrjt92VKki4VJAg"
+    temperature: 0
   
   qwen:
     type: "qwen"
     model_name: "qwen-plus"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key: "sk-38b4cd087fdc468eb0856ffb7c2e1e80"
+    temperature: 0

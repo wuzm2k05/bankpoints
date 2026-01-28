@@ -1,7 +1,7 @@
 import asyncio,traceback
 import ssl
 import pathlib
-import websockets
+#import websockets
 from aiohttp import web
 
 from config import config
