@@ -34,12 +34,12 @@ models:
     type: "hunyuan"
     model_name: "hunyuan-2.0-instruct-20251111"
     base_url: "https://api.hunyuan.cloud.tencent.com/v1"
-    api_key: "sk-N9er2sqJZDxUENhJdAVSHCCMSeS2XM9SlRrjt92VKki4VJAg"
+    api_key: ""
     temperature: 0
   
   qwen:
     type: "qwen"
     model_name: "qwen-plus"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    api_key: "sk-38b4cd087fdc468eb0856ffb7c2e1e80"
+    api_key: ""
     temperature: 0
