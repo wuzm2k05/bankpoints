@@ -1,7 +1,15 @@
 # 2 个空格对齐
 import logging
 from typing import List, Optional, Dict, Any
+
+import sys
+try:
+  __import__('pysqlite3')
+  sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ImportError:
+  pass
 import chromadb
+
 from langchain_community.embeddings import DashScopeEmbeddings
 
 _log = logging.getLogger(__name__)
