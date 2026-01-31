@@ -3,6 +3,7 @@ import redis
 from typing import Annotated, List, TypedDict, Dict, Literal, Optional, Any
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.redis import RedisSaver
+from langgraph.checkpoint.redis import ShallowRedisSaver
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
@@ -75,15 +76,12 @@ class RedemptionAgent:
     # 1. 构造标准 Redis URL
     redis_url = f"redis://{config.get_redis_host()}:{config.get_redis_port()}/0"
     
-    # 2. 核心修正：使用工厂方法，直接传入 URL 字符串
-    # 这样内部会处理连接池、超时等逻辑，避免类型不匹配报错
-    self._redis_cm = RedisSaver.from_conn_string(redis_url=redis_url,
-                                                 ttl={"checkpoint": config.get_redis_msg_ttl_in_seconds()}
-                                                 )
-    self.checkpointer = self._redis_cm.__enter__()
-    # 3. 如果你后续还需要用 redis_client 做 expire 续期，可以单独初始化它
-    # 或者从 checkpointer 中获取：self.redis_client = self.checkpointer.conn
-    #self.redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    # 2. 初始化
+    # 注意：如果 ttl 传 int 报错，请改为 {"ttl": config.get_redis_msg_ttl_in_seconds()}
+    self.checkpointer = ShallowRedisSaver.from_conn_string(
+      redis_url=redis_url,
+      ttl=config.get_redis_msg_ttl_in_seconds() 
+    )
     
     # 编译工作流
     self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
