@@ -71,20 +71,16 @@ class RedemptionAgent:
     self.model = model_factory.get_model()
     self.structured_llm = self.model.with_structured_output(IntentAnalysis)
     
-    # 使用连接池模式，适合多机高并发
-    
+    # 1. 构造标准 Redis URL
     redis_url = f"redis://{config.get_redis_host()}:{config.get_redis_port()}/0"
-    pool = redis.ConnectionPool.from_url(
-      redis_url, 
-      decode_responses=True,
-      max_connections=50, # 根据机器数量调整
-      socket_keepalive=True,
-      socket_timeout=5
-    )
-    self.redis_client = redis.Redis(connection_pool=pool)
-    self.checkpointer = RedisSaver(self.redis_client)
     
-    #self.checkpointer = MemorySaver()
+    # 2. 核心修正：使用工厂方法，直接传入 URL 字符串
+    # 这样内部会处理连接池、超时等逻辑，避免类型不匹配报错
+    self.checkpointer = RedisSaver.from_conn_info(url=redis_url)
+    
+    # 3. 如果你后续还需要用 redis_client 做 expire 续期，可以单独初始化它
+    # 或者从 checkpointer 中获取：self.redis_client = self.checkpointer.conn
+    self.redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
     
     # 编译工作流
     self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
@@ -325,13 +321,14 @@ class RedemptionAgent:
       config
     )
     
-    # --- 关键：手动获取客户端并设置 TTL ---
-    # LangGraph RedisSaver 默认的 key 格式是 'checkpoint:<thread_id>'
-    # 或者你可以通过 redis_client.keys(f"*{thread_id}*") 找到所有相关的 key
+    # 设置过期时间：建议直接搜索该 thread_id 相关的 Key
     try:
-      checkpoint_key = f"checkpoint:{thread_id}"
-      # 设置过期 
-      self.redis_client.expire(checkpoint_key, config.get_redis_msg_ttl_in_seconds())
+      # LangGraph Redis 的 Key 结构通常是：checkpoint:<namespace>:<thread_id>
+      # 简单的做法是匹配所有包含 thread_id 的 key
+      keys = self.redis_client.keys(f"*{thread_id}*")
+      ttl = config.get_redis_msg_ttl_in_seconds()
+      for key in keys:
+        self.redis_client.expire(key, ttl)
     except Exception as e:
       _log.error(f"Redis 续期失败: {e}")
     
