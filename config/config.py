@@ -64,7 +64,7 @@ def get_redis_port():
   return config.getint('redis', 'port', fallback=int(os.environ.get('REDIS_PORT',6379)))
 
 def get_redis_msg_ttl_in_seconds():
-  return config.getint('redis', 'msg_ttl_in_seconds', fallback=int(os.environ.get('REDIS_MSG_TTL_IN_SECONDS',86400)))
+  return config.getint('redis', 'msg_ttl_in_seconds', fallback=int(os.environ.get('REDIS_MSG_TTL_IN_SECONDS',7200)))
 
 ################################################################################################
 ### jd configurations

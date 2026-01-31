@@ -72,7 +72,7 @@ class RedemptionAgent:
     self.structured_llm = self.model.with_structured_output(IntentAnalysis)
     
     # 使用连接池模式，适合多机高并发
-    """
+    
     redis_url = f"redis://{config.get_redis_host()}:{config.get_redis_port()}/0"
     pool = redis.ConnectionPool.from_url(
       redis_url, 
@@ -83,12 +83,8 @@ class RedemptionAgent:
     )
     self.redis_client = redis.Redis(connection_pool=pool)
     self.checkpointer = RedisSaver(self.redis_client)
-    """
     
-    # 初始化持久化记忆（使用 SQLite 存储对话状态）
-    #conn = sqlite3.connect(db_path, check_same_thread=False)
-    #self.checkpointer = SqliteSaver(conn)
-    self.checkpointer = MemorySaver()
+    #self.checkpointer = MemorySaver()
     
     # 编译工作流
     self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
@@ -334,8 +330,8 @@ class RedemptionAgent:
     # 或者你可以通过 redis_client.keys(f"*{thread_id}*") 找到所有相关的 key
     try:
       checkpoint_key = f"checkpoint:{thread_id}"
-      # 设置 24 小时过期 (86400 秒)
-      #self.redis_client.expire(checkpoint_key, config.get_redis_msg_ttl_in_seconds())
+      # 设置过期 
+      self.redis_client.expire(checkpoint_key, config.get_redis_msg_ttl_in_seconds())
     except Exception as e:
       _log.error(f"Redis 续期失败: {e}")
     
