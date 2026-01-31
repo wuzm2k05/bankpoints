@@ -59,8 +59,9 @@ class AgentState(TypedDict):
   messages: Annotated[List[BaseMessage], operator.add]
   user_points: int            # 用户当前积分
   product_keywords: str       # 提取的商品名
-  icbc_info: Dict             # 工行查询结果
-  jd_info: Dict               # 京东查询结果
+  search_terms: List[str]   # 建议的搜索关键词列表
+  icbc_info: Optional[Dict]             # 工行查询结果
+  jd_info: Optional[Dict]               # 京东查询结果
   jd_candidates: List[Dict] # 新增：存储京东返回的多个候选项（用于前端展示）
   missing_info: List[str]     # 缺失的关键信息
   final_recommendation: str   # 最终建议
@@ -76,11 +77,13 @@ class RedemptionAgent:
     
     # 2. 核心修正：使用工厂方法，直接传入 URL 字符串
     # 这样内部会处理连接池、超时等逻辑，避免类型不匹配报错
-    self.checkpointer = RedisSaver.from_conn_string(url=redis_url)
-    
+    self._redis_cm = RedisSaver.from_conn_string(redis_url=redis_url,
+                                                 ttl={"checkpoint": config.get_redis_msg_ttl_in_seconds()}
+                                                 )
+    self.checkpointer = self._redis_cm.__enter__()
     # 3. 如果你后续还需要用 redis_client 做 expire 续期，可以单独初始化它
     # 或者从 checkpointer 中获取：self.redis_client = self.checkpointer.conn
-    self.redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+    #self.redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
     
     # 编译工作流
     self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
@@ -105,16 +108,28 @@ class RedemptionAgent:
     _log.debug("analyze result: %s", res)
     _log.debug("previous state: %s", state)
     
+    # 修正 3：记忆缝合逻辑
+    # 如果本轮 res 有值则更新，否则保留 state 里的旧值
+    current_keywords = res.product_keywords if res.product_keywords else state.get("product_keywords", "")
+    current_search_terms = res.search_terms if res.search_terms else state.get("search_terms", [])
+    
+    # 积分处理：-1 代表本轮没提到，则沿用旧分
+    current_points = res.user_points if res.user_points >= 0 else state.get("user_points", 0)
+    
     ret = {
-      "product_keywords": res.product_keywords or state.get("product_keywords"),
-      "user_points": res.user_points or state.get("user_points", 0),
+      "product_keywords": current_keywords,
+      "search_terms": current_search_terms,
+      "user_points": current_points,
       "missing_info": res.missing_info,
-      "icbc_info": {},
-      "jd_info": {},
+      "icbc_info": None,
+      "jd_info": None,
     }
     
-    if res.reply != "":
+    if res.reply:
       ret["final_recommendation"] = res.reply
+      ret["messages"] = [AIMessage(content=res.reply)]
+    else:
+      ret["messages"] = []
      
     return ret
 
@@ -320,17 +335,6 @@ class RedemptionAgent:
       {"messages": [HumanMessage(content=user_input)]}, 
       config
     )
-    
-    # 设置过期时间：建议直接搜索该 thread_id 相关的 Key
-    try:
-      # LangGraph Redis 的 Key 结构通常是：checkpoint:<namespace>:<thread_id>
-      # 简单的做法是匹配所有包含 thread_id 的 key
-      keys = self.redis_client.keys(f"*{thread_id}*")
-      ttl = config.get_redis_msg_ttl_in_seconds()
-      for key in keys:
-        self.redis_client.expire(key, ttl)
-    except Exception as e:
-      _log.error(f"Redis 续期失败: {e}")
     
     # 返回最后的建议或者追问
     if events.get("final_recommendation"):
