@@ -22,6 +22,10 @@ from core.jd_api import JDUnionClient
 
 _log = logger.get_logger()
 
+# 2 个空格对齐
+from typing import List, Any, Union
+from pydantic import BaseModel, Field, field_validator
+
 class IntentAnalysis(BaseModel):
   product_keywords: str = Field(description="提取的商品关键词，若无则为空字符串")
   search_terms: List[str] = Field(description="用户意图的关键词列表，用来进行向量数据库搜索，若无则为空列表")
@@ -32,10 +36,19 @@ class IntentAnalysis(BaseModel):
   missing_info: List[str] = Field(description="缺失的信息项列表")
   reply: str = Field(description="给用户的追问话术或引导语")
   
+  @field_validator('product_keywords', mode='before')
+  @classmethod
+  def handle_list_or_none(cls, v: Any) -> str:
+    # 核心修复：如果模型调皮返回了 [] (list) 或 None，强制转为 ""
+    if isinstance(v, list):
+      return ", ".join(v) if v else ""
+    if v is None:
+      return ""
+    return str(v)
+
   @field_validator('user_points', mode='before')
   @classmethod
   def handle_empty_points(cls, v: Any) -> Any:
-    # 如果大模型返回了空字符串 "" 或 None，强制转为默认值 -1
     if v == "" or v is None:
       return -1
     return v

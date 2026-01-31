@@ -19,3 +19,4 @@ urllib3
 uvicorn
 websockets
 langgraph-checkpoint-redis
+dashscope
