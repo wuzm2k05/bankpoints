@@ -76,7 +76,7 @@ class RedemptionAgent:
     
     # 2. 核心修正：使用工厂方法，直接传入 URL 字符串
     # 这样内部会处理连接池、超时等逻辑，避免类型不匹配报错
-    self.checkpointer = RedisSaver.from_conn_info(url=redis_url)
+    self.checkpointer = RedisSaver.from_conn_string(url=redis_url)
     
     # 3. 如果你后续还需要用 redis_client 做 expire 续期，可以单独初始化它
     # 或者从 checkpointer 中获取：self.redis_client = self.checkpointer.conn
