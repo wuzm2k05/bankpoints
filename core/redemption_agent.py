@@ -20,6 +20,7 @@ from core.icbc_db import ICBCVectorDB
 import log.logger  as logger
 from core.icbc_points import icbc_points_to_cash, cash_to_icbc_points
 from core.jd_api import JDUnionClient
+from core.simple_redis_saver import SimpleRedisSaver
 
 _log = logger.get_logger()
 
@@ -73,19 +74,22 @@ class RedemptionAgent:
     self.model = model_factory.get_model()
     self.structured_llm = self.model.with_structured_output(IntentAnalysis)
     
-    # 1. 构造标准 Redis URL
-    redis_url = f"redis://{config.get_redis_host()}:{config.get_redis_port()}/0"
-    
-    # 2. 获取上下文管理器
-    # 注意：ttl 根据你之前的定义，如果传 int 报错，请尝试用 {"ttl": ...}
-    self._saver_cm = ShallowRedisSaver.from_conn_string(
-      redis_url=redis_url,
-      ttl={"ttl": config.get_redis_msg_ttl_in_seconds()}
+    # 2. 初始化 Redis 客户端
+    # 注意：decode_responses 必须为 False
+    self.redis_client = redis.Redis(
+      host=config.get_redis_host(),
+      port=config.get_redis_port(),
+      db=0,
+      decode_responses=False
     )
     
-    # 3. 核心修正：通过 __enter__() 获取真正的 checkpointer 实例
-    # 这一步会让 self.checkpointer 变成 BaseCheckpointSaver 类型
-    self.checkpointer = self._saver_cm.__enter__()
+    # 3. 实例化我们的自定义 Saver
+    # ttl 单位为秒，例如 86400 是 24 小时
+    self.checkpointer = SimpleRedisSaver(
+      redis_client=self.redis_client,
+      ttl=config.get_redis_msg_ttl_in_seconds()
+    )
+    
     
     # 编译工作流
     self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
