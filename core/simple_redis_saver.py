@@ -134,14 +134,21 @@ class SimpleRedisSaver(BaseCheckpointSaver):
     key = f"checkpoint:{thread_id}:{checkpoint_id}"
     latest_key = f"checkpoint:{thread_id}:latest"
     
-    # 使用 JsonPlus 序列化 typed 版本，确保消息类 (HumanMessage等) 能被还原
-    data = self.serde.dumps_typed((checkpoint, metadata, config))
+    # --- 核心修正：处理 ChainMap 序列化问题 ---
+    # 将 config 转换为纯 dict，防止 ormsgpack 报错
+    # 我们只序列化我们需要持久化的部分
+    serializable_config = {
+      "configurable": dict(config.get("configurable", {}))
+    }
     
-    # 写续期：SETEX 原子化完成存储与过期设置
+    # 使用转换后的 serializable_config
+    data = self.serde.dumps_typed((checkpoint, metadata, serializable_config))
+    
+    # 写续期
     self.client.setex(key, self.ttl, data)
     self.client.setex(latest_key, self.ttl, data)
     
-    _log.info(f"Checkpoint 存入完成: {thread_id} ({checkpoint_id}), TTL: {self.ttl}s")
+    _log.info(f"Checkpoint 存入完成: {thread_id} ({checkpoint_id})")
     
     return {
       "configurable": {
