@@ -76,12 +76,16 @@ class RedemptionAgent:
     # 1. 构造标准 Redis URL
     redis_url = f"redis://{config.get_redis_host()}:{config.get_redis_port()}/0"
     
-    # 2. 初始化
-    # 注意：如果 ttl 传 int 报错，请改为 {"ttl": config.get_redis_msg_ttl_in_seconds()}
-    self.checkpointer = ShallowRedisSaver.from_conn_string(
+    # 2. 获取上下文管理器
+    # 注意：ttl 根据你之前的定义，如果传 int 报错，请尝试用 {"ttl": ...}
+    self._saver_cm = ShallowRedisSaver.from_conn_string(
       redis_url=redis_url,
-      ttl=config.get_redis_msg_ttl_in_seconds() 
+      ttl={"ttl": config.get_redis_msg_ttl_in_seconds()}
     )
+    
+    # 3. 核心修正：通过 __enter__() 获取真正的 checkpointer 实例
+    # 这一步会让 self.checkpointer 变成 BaseCheckpointSaver 类型
+    self.checkpointer = self._saver_cm.__enter__()
     
     # 编译工作流
     self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
