@@ -30,7 +30,7 @@ class SimpleRedisSaver(BaseCheckpointSaver):
     self.ttl = ttl
 
   def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
-    """获取状态并同步续期最新指针与实体快照"""
+    """获取状态并同步续期最新指针与实体快照 (Pipeline 优化版)"""
     thread_id = config["configurable"]["thread_id"]
     checkpoint_id = config["configurable"].get("checkpoint_id")
     
@@ -42,19 +42,17 @@ class SimpleRedisSaver(BaseCheckpointSaver):
       return None
 
     try:
-      # 反序列化
-      checkpoint, metadata, parent_config = self.serde.loads(data)
+      # JsonPlusSerializer 必须使用 loads_typed 以正确还原消息对象
+      checkpoint, metadata, parent_config = self.serde.loads_typed(data)
       actual_id = checkpoint["id"]
       
-      # 读续命：同步续期指针和实体快照，防止“悬空指针”
-      keys_to_expire = [
-        f"checkpoint:{thread_id}:latest",
-        f"checkpoint:{thread_id}:{actual_id}"
-      ]
-      for k in keys_to_expire:
-        self.client.expire(k, self.ttl)
+      # 使用 Pipeline 减少网络往返时间 (RTT)，同步续期指针和实体
+      pipe = self.client.pipeline()
+      pipe.expire(f"checkpoint:{thread_id}:latest", self.ttl)
+      pipe.expire(f"checkpoint:{thread_id}:{actual_id}", self.ttl)
+      pipe.execute()
       
-      # 补全 config 中的 checkpoint_id，确保 LangGraph 能够精准追踪版本
+      # 补全 config 中的 checkpoint_id，确保版本追踪准确
       final_config = {
         "configurable": {
           "thread_id": thread_id,
@@ -78,12 +76,12 @@ class SimpleRedisSaver(BaseCheckpointSaver):
     before: Optional[RunnableConfig] = None,
     limit: Optional[int] = None,
   ) -> Iterator[CheckpointTuple]:
-    """流式罗列历史快照，尊重 before 参数并节省内存"""
+    """流式罗列历史快照，尊重 before 参数并节省内存 (边扫边产出)"""
     if not config: return
     thread_id = config["configurable"]["thread_id"]
     before_id = before["configurable"].get("checkpoint_id") if before else None
     
-    # 1. 使用 scan_iter 避免 O(N) 阻塞 Redis
+    # 1. 使用 scan_iter 避免 O(N) 阻塞 Redis 线程
     pattern = f"checkpoint:{thread_id}:*"
     all_keys = []
     for key in self.client.scan_iter(match=pattern, count=100):
@@ -97,21 +95,20 @@ class SimpleRedisSaver(BaseCheckpointSaver):
     count = 0
     found_before = False if before_id else True
     
-    # 3. 边扫边产出 (Streaming Yield)
+    # 3. 边读边 yield，防止大列表占用内存
     for key in all_keys:
       data = self.client.get(key)
       if not data: continue
       
-      checkpoint, metadata, parent_config = self.serde.loads(data)
+      checkpoint, metadata, parent_config = self.serde.loads_typed(data)
       curr_id = checkpoint["id"]
       
-      # 处理 before 过滤逻辑
+      # 处理 before 逻辑：跳过直到匹配到 before_id 之后
       if before_id and not found_before:
         if curr_id == before_id:
           found_before = True
         continue
       
-      # 产出快照元组
       yield CheckpointTuple(
         config={"configurable": {"thread_id": thread_id, "checkpoint_id": curr_id}},
         checkpoint=checkpoint,
@@ -137,8 +134,8 @@ class SimpleRedisSaver(BaseCheckpointSaver):
     key = f"checkpoint:{thread_id}:{checkpoint_id}"
     latest_key = f"checkpoint:{thread_id}:latest"
     
-    # 使用 JsonPlus 序列化，确保跨平台和跨版本兼容
-    data = self.serde.dumps((checkpoint, metadata, config))
+    # 使用 JsonPlus 序列化 typed 版本，确保消息类 (HumanMessage等) 能被还原
+    data = self.serde.dumps_typed((checkpoint, metadata, config))
     
     # 写续期：SETEX 原子化完成存储与过期设置
     self.client.setex(key, self.ttl, data)
