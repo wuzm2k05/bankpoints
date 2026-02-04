@@ -1,173 +1,155 @@
-# 2 个空格对齐
-import logging
-from typing import Any, Optional, Iterator
-from langchain_core.runnables import RunnableConfig
+import ormsgpack
+import json
+from typing import Any, Optional, Iterator, Sequence
+from redis import Redis
 from langgraph.checkpoint.base import (
   BaseCheckpointSaver,
-  Checkpoint,
-  CheckpointMetadata,
-  CheckpointTuple,
   SerializerProtocol
 )
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-_log = logging.getLogger(__name__)
+# 1.0.7 版本中，Checkpoint 和相关元组通常在运行时动态注入
+# 我们通过通用类型来避免导入错误
 
+import log.logger as logger
+_log = logger.get_logger()
+
+# --- 兼容性序列化器 ---
+class CrossCompatibleSerializer(SerializerProtocol):
+  def dumps(self, obj: Any) -> bytes:
+    try:
+      return ormsgpack.packb(
+        obj,
+        option=ormsgpack.OPT_NON_STR_KEYS,
+        default=self._default_encoder
+      )
+    except Exception as e:
+      _log.debug(f"ormsgpack fallback to JSON: {e}")
+      return json.dumps(obj, default=str).encode("utf-8")
+
+  def _default_encoder(self, obj: Any) -> Any:
+    if hasattr(obj, "dict") and callable(obj.dict):
+      return obj.dict()
+    if hasattr(obj, "__dict__"):
+      return vars(obj)
+    obj_type = str(type(obj))
+    if any(x in obj_type for x in ["ChainMap", "Runtime", "ToolCall", "Message"]):
+      try: return dict(obj)
+      except: return str(obj)
+    return str(obj)
+
+  def loads(self, data: bytes) -> Any:
+    try:
+      return ormsgpack.unpackb(data)
+    except Exception:
+      return json.loads(data.decode("utf-8"))
+
+# --- 针对 1.0.7 优化的 SimpleRedisSaver ---
 class SimpleRedisSaver(BaseCheckpointSaver):
-  def __init__(
-    self, 
-    redis_client, 
-    ttl: int = 86400, 
-    serde: Optional[SerializerProtocol] = None
-  ):
-    """
-    :param redis_client: 需设置 decode_responses=False 的 redis 实例
-    :param ttl: 过期时间（秒），默认 24 小时
-    :param serde: 序列化器，默认为官方推荐的 JsonPlusSerializer
-    """
-    super().__init__(serde=serde or JsonPlusSerializer())
+  def __init__(self, redis_client: Redis, ttl: int = 86400):
+    # 1.0.7 的 BaseCheckpointSaver 构造函数通常只需要 serde
+    # 我们这里手动赋值以确保兼容
+    super().__init__()
     self.client = redis_client
     self.ttl = ttl
+    self.serde = CrossCompatibleSerializer()
 
-  def _make_safe(self, obj: Any) -> Any:
-    """递归确保对象可被 msgpack/json 序列化，处理 ChainMap 和 Runtime 对象"""
-    if isinstance(obj, dict):
-      return {k: self._make_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-      return [self._make_safe(x) for x in obj]
+  def put(self, config: dict, checkpoint: Any, metadata: Any, new_versions: dict) -> dict:
+    thread_id = str(config["configurable"]["thread_id"])
+    checkpoint_id = str(checkpoint["id"])
+    key = f"checkpoints:{thread_id}"
     
-    # 处理特殊类型：ChainMap 转 dict, Runtime 等不可序列化对象转字符串
-    obj_type_str = str(type(obj))
-    if "ChainMap" in obj_type_str:
-      return dict(obj)
-    if "Runtime" in obj_type_str:
-      return f"<Runtime_Object>"
-    return obj
+    blob = self.serde.dumps({
+      "checkpoint": checkpoint,
+      "metadata": metadata,
+      "parent_config": config.get("parent_config")
+    })
 
-  def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
-    """获取状态并使用 Pipeline 同步续期最新指针与实体快照"""
-    thread_id = config["configurable"]["thread_id"]
-    checkpoint_id = config["configurable"].get("checkpoint_id")
-    
-    key = f"checkpoint:{thread_id}:{checkpoint_id}" if checkpoint_id else f"checkpoint:{thread_id}:latest"
+    pipe = self.client.pipeline()
+    pipe.hset(key, checkpoint_id, blob)
+    pipe.hset(key, "__latest__", checkpoint_id)
+    if self.ttl:
+      pipe.expire(key, self.ttl)
+    pipe.execute()
 
-    data = self.client.get(key)
-    if not data:
-      return None
-
-    try:
-      # 使用 loads_typed 还原 LangGraph 对象
-      checkpoint, metadata, parent_config = self.serde.loads_typed(data)
-      actual_id = checkpoint["id"]
-      
-      # 性能优化：使用 Pipeline 批量续期，减少 RTT
-      pipe = self.client.pipeline()
-      pipe.expire(f"checkpoint:{thread_id}:latest", self.ttl)
-      pipe.expire(f"checkpoint:{thread_id}:{actual_id}", self.ttl)
-      pipe.execute()
-      
-      # 补全 config
-      final_config = {
-        "configurable": {
-          "thread_id": thread_id,
-          "checkpoint_id": actual_id
-        }
-      }
-      return CheckpointTuple(
-        config=final_config,
-        checkpoint=checkpoint,
-        metadata=metadata,
-        parent_config=parent_config
-      )
-    except Exception as e:
-      _log.error(f"从 Redis 恢复 Checkpoint 失败: {e}")
-      return None
-
-  def list(
-    self,
-    config: Optional[RunnableConfig],
-    *,
-    before: Optional[RunnableConfig] = None,
-    limit: Optional[int] = None,
-  ) -> Iterator[CheckpointTuple]:
-    """流式罗列历史快照，内存友好且尊重 before 过滤逻辑"""
-    if not config: return
-    thread_id = config["configurable"]["thread_id"]
-    before_id = before["configurable"].get("checkpoint_id") if before else None
-    
-    # 1. 使用 scan_iter 避免 O(N) 阻塞 Redis 线程
-    pattern = f"checkpoint:{thread_id}:*"
-    all_keys = []
-    for key in self.client.scan_iter(match=pattern, count=100):
-      key_str = key.decode() if isinstance(key, bytes) else key
-      if ":latest" not in key_str:
-        all_keys.append(key)
-    
-    # 2. 预排序 Keys（按时间序倒序）
-    all_keys.sort(reverse=True)
-
-    count = 0
-    found_before = False if before_id else True
-    
-    # 3. 边读边 yield (Streaming)
-    for key in all_keys:
-      data = self.client.get(key)
-      if not data: continue
-      
-      checkpoint, metadata, parent_config = self.serde.loads_typed(data)
-      curr_id = checkpoint["id"]
-      
-      # 处理 before 过滤
-      if before_id and not found_before:
-        if curr_id == before_id:
-          found_before = True
-        continue
-      
-      yield CheckpointTuple(
-        config={"configurable": {"thread_id": thread_id, "checkpoint_id": curr_id}},
-        checkpoint=checkpoint,
-        metadata=metadata,
-        parent_config=parent_config
-      )
-      
-      count += 1
-      if limit and count >= limit:
-        break
-
-  def put(
-    self,
-    config: RunnableConfig,
-    checkpoint: Checkpoint,
-    metadata: CheckpointMetadata,
-    new_versions: Any,
-  ) -> RunnableConfig:
-    """持久化状态，自动处理不可序列化对象并执行滑动续期"""
-    thread_id = config["configurable"]["thread_id"]
-    checkpoint_id = checkpoint["id"]
-    
-    key = f"checkpoint:{thread_id}:{checkpoint_id}"
-    latest_key = f"checkpoint:{thread_id}:latest"
-    
-    # 核心修正：深度清洗数据，防止 msgpack 序列化崩溃
-    safe_checkpoint = self._make_safe(checkpoint)
-    safe_config = {"configurable": dict(config.get("configurable", {}))}
-    
-    try:
-      # 使用 dumps_typed 进行序列化
-      data = self.serde.dumps_typed((safe_checkpoint, metadata, safe_config))
-      
-      # 写续期：原子化存储
-      self.client.setex(key, self.ttl, data)
-      self.client.setex(latest_key, self.ttl, data)
-      
-      _log.info(f"Checkpoint 存入成功: {thread_id} ({checkpoint_id})")
-    except Exception as e:
-      _log.error(f"序列化 Checkpoint 失败，数据未存入: {e}")
-      raise e # 抛出异常防止静默失败
-    
     return {
       "configurable": {
-        "thread_id": thread_id,
+        "thread_id": thread_id, 
         "checkpoint_id": checkpoint_id
       }
     }
+
+  def put_writes(self, config: dict, writes: Sequence[Any], task_id: str) -> None:
+    thread_id = str(config["configurable"]["thread_id"])
+    checkpoint_id = str(config["configurable"]["checkpoint_id"])
+    key = f"writes:{thread_id}:{checkpoint_id}"
+    
+    pipe = self.client.pipeline()
+    for idx, write in enumerate(writes):
+      write_key = f"{task_id}_{idx}"
+      # 在 1.0.7 中，write 可能是元组也可能是对象，直接序列化即可
+      blob = self.serde.dumps(write)
+      pipe.hset(key, write_key, blob)
+    
+    if self.ttl:
+      pipe.expire(key, self.ttl)
+    pipe.execute()
+
+  def get_tuple(self, config: dict) -> Optional[Any]:
+    from langgraph.checkpoint.base import CheckpointTuple 
+    
+    thread_id = str(config["configurable"]["thread_id"])
+    checkpoint_id = config["configurable"].get("checkpoint_id")
+    key = f"checkpoints:{thread_id}"
+
+    if not checkpoint_id:
+      res = self.client.hget(key, "__latest__")
+      checkpoint_id = res.decode("utf-8") if res else None
+    
+    if not checkpoint_id:
+      return None
+
+    data = self.client.hget(key, checkpoint_id)
+    if data:
+      try:
+        content = self.serde.loads(data)
+        # --- 防御性检查开始 ---
+        if not isinstance(content, dict) or "checkpoint" not in content:
+          _log.warning(f"发现不兼容的脏数据，已跳过: {checkpoint_id}")
+          return None
+        # --- 防御性检查结束 ---
+
+        return CheckpointTuple(
+          config={"configurable": {"thread_id": thread_id, "checkpoint_id": checkpoint_id}},
+          checkpoint=content["checkpoint"],
+          metadata=content.get("metadata", {}),
+          parent_config=content.get("parent_config"),
+          pending_writes=[]
+        )
+      except Exception as e:
+        _log.error(f"解析 Checkpoint 失败: {checkpoint_id}, {e}")
+    return None
+
+  def list(self, config: dict, *, before: Optional[dict] = None, limit: Optional[int] = None) -> Iterator[Any]:
+    from langgraph.checkpoint.base import CheckpointTuple
+    
+    thread_id = str(config["configurable"]["thread_id"])
+    key = f"checkpoints:{thread_id}"
+    count = 0
+    # 使用 hscan_iter 避免阻塞
+    for ckpt_id, data in self.client.hscan_iter(key, match="*", count=100):
+      if limit and count >= limit: break
+      if ckpt_id == b"__latest__": continue
+      try:
+        content = self.serde.loads(data)
+        # 同样的防御性检查
+        if isinstance(content, dict) and "checkpoint" in content:
+          yield CheckpointTuple(
+            config={"configurable": {"thread_id": thread_id, "checkpoint_id": ckpt_id.decode("utf-8")}},
+            checkpoint=content["checkpoint"],
+            metadata=content.get("metadata", {}),
+            parent_config=content.get("parent_config"),
+            pending_writes=[]
+          )
+          count += 1
+      except:
+        continue

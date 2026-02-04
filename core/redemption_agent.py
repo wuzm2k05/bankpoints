@@ -90,7 +90,6 @@ class RedemptionAgent:
       ttl=config.get_redis_msg_ttl_in_seconds()
     )
     
-    
     # 编译工作流
     self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
     self.idb = ICBCVectorDB(api_key=config.get_qwen_api_key())
