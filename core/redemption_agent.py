@@ -1,4 +1,5 @@
 import operator
+import re
 import redis
 from typing import Annotated, List, TypedDict, Dict, Literal, Optional, Any
 from langgraph.checkpoint.memory import MemorySaver
@@ -21,6 +22,7 @@ import log.logger  as logger
 from core.icbc_points import icbc_points_to_cash, cash_to_icbc_points
 from core.jd_api import JDUnionClient
 from core.simple_redis_saver import SimpleRedisSaver
+import json
 
 _log = logger.get_logger()
 
@@ -97,7 +99,6 @@ class RedemptionAgent:
 
   # --- 节点 A: 意图与实体解析 ---
   def _analyze_intent(self, state: AgentState):
-    _log.info("default analyze_intent_system_prompt: %s", resource.get_resource()["default_values"]["analyze_intent_system_prompt"])
     prompt = ChatPromptTemplate.from_messages([
       ("system", resource.get_resource()["default_values"]["analyze_intent_system_prompt"]),
       # 这里是关键：要把历史消息 state["messages"] 传给模型，它才知道第一轮说了什么
@@ -109,9 +110,44 @@ class RedemptionAgent:
     last_message = state["messages"][-1].content
     history = state["messages"][:-1]
     
-    res = chain.invoke({"input": last_message, "chat_history": history})
-    _log.debug("analyze result: %s", res)
-    _log.debug("previous state: %s", state)
+    # 关键改进：添加错误重试逻辑和 fallback 机制
+    max_retries = 3
+    res = None
+    for attempt in range(max_retries):
+      try:
+        raw_res = chain.invoke({"input": last_message, "chat_history": history})
+        # 情况 A：模型返回的是字符串（包含废话）
+        if isinstance(raw_res, str):
+          # 使用正则提取最外层的大括号内容
+          match = re.search(r"\{.*\}", raw_res, re.DOTALL)
+          if match:
+            json_str = match.group(0)
+            # 手动解析并验证
+            res_dict = json.loads(json_str)
+            res = IntentAnalysis(**res_dict)
+          else:
+            raise ValueError("未找到合法的 JSON 结构")
+        
+        # 情况 B：模型返回的是 IntentAnalysis 对象（正常情况）
+        else:
+          res = raw_res
+        
+        _log.debug("analyze result: %s", res)
+        _log.debug("previous state: %s", state)
+        break
+      except Exception as e:
+        _log.warning(f"Attempt {attempt+1} failed to parse LLM response: {str(e)}")
+        if attempt == max_retries - 1:
+          # ✅ 最后一次失败时，返回默认响应而不是崩溃
+          _log.error(f"Max retries ({max_retries}) reached, using fallback response")
+          res = IntentAnalysis(
+            product_keywords="",
+            search_terms=[],
+            user_points=-1,
+            missing_info=["具体品类", "积分数"],
+            reply="抱歉，我没有理解您的需求。请告诉我您想要什么商品，以及您大概有多少积分？"
+          )
+          break
     
     # 修正 3：记忆缝合逻辑
     # 如果本轮 res 有值则更新，否则保留 state 里的旧值
