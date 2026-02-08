@@ -104,3 +104,48 @@ class RedemptionAgent:
     
     # 返回模型最后的回复内容
     return final_state["messages"][-1].content
+  
+  def chat_with_trace(self, user_input: str, thread_id: str):
+    """
+    对外统一对话接口，支持返回工具调用轨迹 (Trace)
+    返回：(最终回复内容, 工具调用轨迹列表)
+    """
+    config_dict = {"configurable": {"thread_id": thread_id}}
+    inputs = {
+      "messages": [HumanMessage(content=user_input)]
+    }
+
+    # 1. 执行工作流，获取完整的状态
+    final_state = self.app.invoke(inputs, config=config_dict)
+    
+    # 2. 提取最终回复
+    final_content = final_state["messages"][-1].content
+    
+    # 3. 提取本次对话触发的工具轨迹
+    # 我们只关注最后一次用户输入之后产生的 Tool 调用
+    trace = []
+    
+    # 倒序查找，直到遇到本次输入的 HumanMessage 停止
+    for msg in reversed(final_state["messages"][:-1]):
+      if isinstance(msg, HumanMessage):
+        break
+        
+      # 如果是包含工具调用的 AIMessage
+      if isinstance(msg, AIMessage) and msg.tool_calls:
+        for tc in msg.tool_calls:
+          # 寻找对应的 ToolMessage (结果)
+          # 在 LangGraph 中，ToolMessage 的 tool_call_id 会匹配 AIMessage 的 id
+          tool_result = next(
+            (m.content for m in final_state["messages"] 
+             if isinstance(m, ToolMessage) and m.tool_call_id == tc["id"]), 
+            "No result found"
+          )
+          
+          trace.append({
+            "tool": tc["name"],
+            "input": tc["args"],
+            "output": tool_result
+          })
+          
+    # 因为是倒序提取的，最后翻转一下顺序使其符合时间线
+    return final_content, list(reversed(trace))

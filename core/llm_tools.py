@@ -88,6 +88,7 @@ def search_jd_promotion(keyword: str):
       - price (float): 券后到手价。
       - promo_link (str): 推广URL。
       - advantage (str): 对比积分兑换的核心优势。
+    None: 若无精确匹配则返回 None。
   """
   _log.info(f"search_jd_promotion tool: 搜索京东，关键词：{keyword}")
   # 模拟京东数据库，针对 1100:1 汇率进行定价优化
@@ -146,12 +147,7 @@ def search_jd_promotion(keyword: str):
     }
   
   # 默认降级方案
-  return {
-    "sku_name": f"京东综合搜索-{keyword}",
-    "price": 99.0, # 默认一个中间价
-    "promo_link": "https://u.jd.com/default",
-    "advantage": "暂无精准比价，请以 1100:1 的原则自行判断"
-  }
+  return None
   
 @tool
 def get_points_activities(gap_points: int = 0):
