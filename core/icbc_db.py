@@ -1,8 +1,11 @@
 # 2 个空格对齐
 import logging
+import re
 from typing import List, Optional, Dict, Any
-
 import sys
+
+import config.config as config
+
 try:
   __import__('pysqlite3')
   sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
@@ -12,17 +15,19 @@ import chromadb
 
 from langchain_community.embeddings import DashScopeEmbeddings
 
+from util.singleton import SingletonMeta
+
 _log = logging.getLogger(__name__)
 
-class ICBCVectorDB:
-  def __init__(self, api_key: str):
+class ICBCVectorDB(metaclass=SingletonMeta):
+  def __init__(self):
     # 1. 初始化 ChromaDB 持久化客户端
     self.client = chromadb.PersistentClient(path="./icbc_vector_db")
     
     # 2. 初始化 Qwen Embedding 接口
     self.embeddings = DashScopeEmbeddings(
       model="text-embedding-v3",
-      dashscope_api_key=api_key
+      dashscope_api_key=config.get_qwen_api_key()
     )
     
     # 3. 定义商品 Collection
@@ -34,13 +39,13 @@ class ICBCVectorDB:
     self.strategy_collection = self.client.get_or_create_collection(
       name="icbc_strategies"
     )
-
+  
   def add_products(self, products: List[Dict[str, Any]]):
     """批量添加商品数据"""
     ids = [p["id"] for p in products]
-    documents = [f"{p['name']}: {p['desc']}" for p in products]
+    documents = [f"商品名称: {p['name']}。所需积分: {p['points']}豆。" for p in products]
     metadatas = [{"name": p["name"], "points": p["points"]} for p in products]
-    
+        
     embeddings = self.embeddings.embed_documents(documents)
     
     self.product_collection.add(
@@ -50,26 +55,29 @@ class ICBCVectorDB:
       metadatas=metadatas
     )
     _log.info(f"成功导入 {len(ids)} 条商品数据")
-
-  def search(self, query: str, limit: int = 1) -> Optional[Dict[str, Any]]:
-    """语义搜索最匹配的商品"""
+    
+  
+  def search(self, query: str, limit: int = 3):
     query_vector = self.embeddings.embed_query(query)
     results = self.product_collection.query(
       query_embeddings=[query_vector],
       n_results=limit
     )
     
-    if not results["ids"][0]:
-      return None
-      
-    metadata = results["metadatas"][0][0]
-    distance = results["distances"][0][0]
-    
-    return {
-      "name": metadata["name"],
-      "points": metadata["points"],
-      "distance": distance
-    }
+    output = []
+    # 关键点：ChromaDB 的 query 结果是一个嵌套列表
+    if results["ids"] and len(results["ids"][0]) > 0:
+      for i in range(len(results["ids"][0])):
+        # 确保从 metadatas 中获取字典数据
+        metadata = results["metadatas"][0][i]
+        distance = results["distances"][0][i]
+        
+        output.append({
+          "name": metadata.get("name", "未知商品"),
+          "points": metadata.get("points", 0),
+          "distance": distance
+        })
+    return output
 
   # --- 新增：积分策略相关功能 ---
 

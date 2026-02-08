@@ -80,6 +80,12 @@ def get_jd_site_id():
 def get_jd_position_id():
   return config.get('jd', 'position_id', fallback=os.environ.get('JD_POSITION_ID',""))
 
+
+################################################################################################
+### icbc mall configurations
+def get_icbc_mall_point_rate():
+  return config.getint('icbc_mall', 'point_rate', fallback=int(os.environ.get('ICBC_MALL_POINT_RATE',1100)))
+
 ################################################################################################
 ### for files location
 def get_resource_file():
