@@ -29,25 +29,25 @@ class AgentTester:
     self.judge_model = "deepseek-chat" # 使用 DeepSeek-V3
 
   def get_cases(self):
-    """定义完整测试用例库"""
+    """定义完整测试用例库，包含基础、流程及模糊语义测试"""
     return [
       {
         "id": "TC-01",
         "name": "基础比价-工行划算",
         "dialogs": ["我有 20000 积分，想换霸王茶姬 20 元券，划算吗？"],
-        "goal": "应识别 1.71万豆折合15.5元，对比京东20元利用率>100%，推荐兑换。"
+        "goal": "应识别 1.71万豆折合17.1元，对比京东20元，推荐兑换。"
       },
       {
         "id": "TC-02",
         "name": "基础比价-京东划算",
         "dialogs": ["我有 150000 积分，想换个小米暖风机，帮我算算。"],
-        "goal": "应算出11万豆折合100元，高于京东89元。结论必须推荐「换立减金+京东买」。"
+        "goal": "应算出11万豆折合110元，高于京东89元。结论必须推荐「换立减金+京东买」。"
       },
       {
         "id": "TC-03",
         "name": "流程控制-积分索取",
         "dialogs": ["我想买个海尔电风扇，工行换划算吗？"], 
-        "goal": "核心法则约束：在不知道积分数前，必须礼貌拒绝推荐并询问积分。"
+        "goal": "核心法则：未知积分前必须礼貌询问积分数。"
       },
       {
         "id": "TC-04",
@@ -56,19 +56,32 @@ class AgentTester:
           "我有 50000 积分，想换海尔电风扇。",
           "记错了，我其实有 150000 积分，重新帮我算一下。"
         ],
-        "goal": "测试状态一致性。第二轮必须丢弃5万假设，按15万积分重新执行比价计算。"
+        "goal": "第二轮必须按 15 万积分重新执行计算。"
       },
       {
         "id": "TC-05",
         "name": "开放式建议-资产配置",
         "dialogs": ["我有 50 万积分，想换个华为 WATCH GT5，或者有更好的建议吗？"],
-        "goal": "需对比 GT5(109.9万豆) 和 特来电(46.5万豆) 的利用率，建议兑换高价值硬通货。"
+        "goal": "建议兑换高价值硬通货（如特来电或立减金）。"
       },
       {
         "id": "TC-06",
         "name": "陷阱规避-小额刺客",
-        "dialogs": ["我有 30000 积分，想换箱雪碧和手帕纸，可以吗？"],
-        "goal": "雪碧折算18.45元高于京东15.9元。必须拦截此兑换，推荐立减金方案。"
+        "dialogs": ["我有 30000 积分，想换箱雪碧，可以吗？"],
+        "goal": "拦截兑换，推荐立减金。"
+      },
+      # --- 新增模糊语义测试用例 ---
+      {
+        "id": "TC-07",
+        "name": "模糊语义-父亲生日礼物",
+        "dialogs": ["我手里有 20 万积分，想给父亲买个生日礼物，工行商城有什么推荐吗？"],
+        "goal": "测试主动检索能力。Agent 应调用搜索工具查询如‘中老年’、‘剃须刀’或‘按摩仪’，给出具体比价方案而非泛泛而谈。"
+      },
+      {
+        "id": "TC-08",
+        "name": "模糊语义-大额积分消耗",
+        "dialogs": ["我积分快到期了，还有 80 万分，怎么换最不亏？"],
+        "goal": "测试策略性。应通过搜索筛选高价值大额商品（如手机、加油卡），并计算利用率，给出‘不亏’的组合建议。"
       }
     ]
 
@@ -79,10 +92,10 @@ class AgentTester:
     你需要对比【管家回复】和【工具调用轨迹】，核实其是否有脑补行为。
 
     【精算准则】：
-    1. 汇率强制性：必须使用 1000:1。出现 500:1 或 1000:1 直接判为 0 分。
-    2. 路径最优性：若兑换实物不划算，必须提到「兑换立减金/E卡 + 京东下单」。
-    3. 数据严谨性（核心）：严禁脑补。回复中的价格/积分必须在 `tool_calls` 的 output 中有据可查。
-    4. 流程合规性：未知积分前不得推荐商品；积分变更后必须重新计算。
+    1. 汇率强制性：必须使用 1000:1。出现其他比例直接判为 0 分。
+    2. 路径最优性：若工行换实物不划算，必须提到「兑换立减金/E卡 + 京东下单」。
+    3. 数据严谨性（核心）：严禁脑补。回复中的所有价格/积分必须在 `tool_calls` 的 output 中有据可查。
+    4. 模糊处理逻辑：面对模糊需求（如“送礼”），必须先调用 `vector_search_icbc_mall` 检索可能商品，严禁凭空编造商城不存在的礼品。
 
     【测试用例目标】：{case['goal']}
     【执行全记录（含工具轨迹）】：
@@ -92,7 +105,7 @@ class AgentTester:
     {{
       "score": 0-100,
       "passed": true/false,
-      "audit_reason": "请详细指出：1.是否漏调工具 2.数字是否对齐轨迹 3.汇率是否正确"
+      "audit_reason": "详细指出：1.是否漏调工具 2.数字是否对齐 3.模糊需求下是否进行了有效搜索"
     }}
     """
     
@@ -110,25 +123,21 @@ class AgentTester:
 
     for case in all_cases:
       print(f"👉 测试中: {case['name']}")
-      # 每次测试使用全新的 thread_id 保证隔离
       thread_id = f"test_case_{case['id']}_{int(time.time())}" 
       chat_log = []
 
       for user_input in case["dialogs"]:
         _log.info(f"[{case['id']}] 用户输入: {user_input}")
-        
-        # 调用带轨迹捕获的对话接口
         agent_output, tool_trace = self.agent.chat_with_trace(user_input, thread_id=thread_id)
         
         _log.info(f"[{case['id']}] 管家回复: {agent_output}")
         chat_log.append({
           "user": user_input, 
           "assistant": agent_output,
-          "tool_calls": tool_trace # 将后台工具执行详情塞入日志，供裁判查阅
+          "tool_calls": tool_trace 
         })
       
-      # 裁判打分
-      print("   ⚖️ 正在调用 DeepSeek-V3 审计工具轨迹与回复一致性...")
+      print("   ⚖️ 正在进行审计...")
       evaluation = self._judge_with_deepseek(case, chat_log)
       evaluation['name'] = case['name']
       final_results.append(evaluation)
@@ -144,20 +153,12 @@ class AgentTester:
     for r in results:
       status = "✅ [PASS]" if r['passed'] else "❌ [FAIL]"
       print(f"{status} {r['name']}")
-      print(f"      得分: {r['score']}")
-      print(f"      审计意见: {r['audit_reason']}")
+      print(f"      得分: {r['score']} | 审计意见: {r['audit_reason']}")
       print("-" * 70)
     
-    print(f"总结：共运行 {len(results)} 项，通过 {passed_num} 项。")
-    if passed_num == len(results):
-      print("🎉 恭喜！Agent 表现完美，计算严谨且无任何脑补行为。")
+    print(f"总结：运行 {len(results)} 项，通过 {passed_num} 项。")
 
-# --- 执行入口 ---
 if __name__ == "__main__":
-  # 实例化 RedemptionAgent
-  # 注意：请确保你的 RedemptionAgent 类中已经按照前文建议添加了 chat_with_trace 方法
   my_agent = RedemptionAgent()
-  
-  # 运行测试
   tester = AgentTester(my_agent)
   tester.run()

@@ -83,59 +83,26 @@ def search_jd_promotion(keyword: str):
     keyword (str): 要在京东比价的精确商品名称。
     
   Returns:
-    dict: 京东比价数据。
+    dict: 京东数据。
       - sku_name (str): 京东商品名。
       - price (float): 券后到手价。
       - promo_link (str): 推广URL。
-      - advantage (str): 对比积分兑换的核心优势。
+      - source (str): 商品来源。
     None: 若无精确匹配则返回 None。
   """
   _log.info(f"search_jd_promotion tool: 搜索京东，关键词：{keyword}")
-  # 模拟京东数据库，针对 1100:1 汇率进行定价优化
+  
+  # 模拟纯净的京东数据库：只包含京东本身的数据
   jd_database = [
-    # --- 情况 A：工行更值（京东价 > 工行折算价） ---
-    {
-      "name": "霸王茶姬代金券20元", 
-      "price": 20.0, 
-      "advantage": "京东无折扣。工行仅需1.71万豆（折合15.5元），省下4.5元，强烈推荐！"
-    },
-    {
-      "name": "禧天龙保鲜盒两件套H80407", 
-      "price": 18.9, 
-      "advantage": "京东自营略贵。工行折算仅13.45元，利用率高达140%。"
-    },
-    {
-      "name": "特来电500元", 
-      "price": 500.0, 
-      "advantage": "刚需硬通货。工行折算约422元，相当于84折充值，大额首选。"
-    },
-
-    # --- 情况 B：京东更值（京东价 < 工行折算价） ---
-    {
-      "name": "小米米家桌面暖风机", 
-      "price": 89.0, 
-      "advantage": "京东百亿补贴仅89元！工行需11万豆（折合100元），换这个就亏了。"
-    },
-    {
-      "name": "雪碧 含糖雪碧 200mlx12罐", 
-      "price": 15.9, 
-      "advantage": "京东超市整箱更便宜。工行折算要18.45元，不建议兑换。"
-    },
-    {
-      "name": "奈雪的茶代金券10元", 
-      "price": 6.6, 
-      "advantage": "京东现有秒杀券。比工行8000豆（折合7.27元）更低。建议现金买。"
-    },
-
-    # --- 情况 C：工行库里没有的（诱导用户发现新世界） ---
-    {
-      "name": "华为Mate 60 Pro", 
-      "price": 5499.0, 
-      "advantage": "工行暂无此高价值货源，建议攒豆换成E卡后回京东购买。"
-    }
+    {"name": "霸王茶姬代金券20元", "price": 20.0},
+    {"name": "禧天龙保鲜盒两件套H80407", "price": 18.9},
+    {"name": "特来电500元余额充值", "price": 500.0},
+    {"name": "小米米家桌面暖风机", "price": 89.0},
+    {"name": "雪碧 含糖雪碧 200mlx12罐", "price": 15.9},
+    {"name": "奈雪的茶代金券10元", "price": 6.6},
+    {"name": "华为Mate 60 Pro", "price": 5499.0}
   ]
 
-  # 模糊搜索逻辑
   match = next((item for item in jd_database if keyword in item["name"]), None)
   
   if match:
@@ -143,10 +110,9 @@ def search_jd_promotion(keyword: str):
       "sku_name": f"京东自营-{match['name']}",
       "price": match["price"],
       "promo_link": f"https://u.jd.com/p?k={keyword}",
-      "advantage": match["advantage"]
+      "source": "JD_MALL" # 明确来源，不包含任何建议
     }
   
-  # 默认降级方案
   return None
   
 @tool
