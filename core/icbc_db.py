@@ -39,6 +39,11 @@ class ICBCVectorDB(metaclass=SingletonMeta):
     self.strategy_collection = self.client.get_or_create_collection(
       name="icbc_strategies"
     )
+    
+    # 5. 定义立减金知识 Collection
+    self.voucher_collection = self.client.get_or_create_collection(
+      name="icbc_standing_vouchers"
+    )
   
   def add_products(self, products: List[Dict[str, Any]]):
     """批量添加商品数据"""
@@ -124,3 +129,47 @@ class ICBCVectorDB(metaclass=SingletonMeta):
       })
     
     return output
+  
+  def add_voucher_knowledge(self, qa_content: str):
+    """
+    处理原始 Q&A 文本并存入立减金库 (Voucher Store)
+    qa_content: 包含 Q: A: 的原始文本
+    """
+    # 按 Q：拆分
+    parts = re.split(r'Q[:：]', qa_content)
+    documents = []
+    ids = []
+    metadatas = []
+    
+    for idx, part in enumerate(parts):
+      if not part.strip():
+        continue
+      full_content = "Q: " + part.strip()
+      ids.append(f"voucher_qa_{idx}")
+      documents.append(full_content)
+      # 元数据标注为 voucher 类型
+      metadatas.append({"source": "official_faq", "type": "standing_voucher"})
+
+    if not documents:
+      return
+
+    embeddings = self.embeddings.embed_documents(documents)
+    self.voucher_collection.add(
+      ids=ids,
+      embeddings=embeddings,
+      documents=documents,
+      metadatas=metadatas
+    )
+    _log.info(f"成功导入 {len(documents)} 条立减金(Voucher)业务知识")
+
+  def search_voucher_info(self, query: str, limit: int = 2) -> List[str]:
+    """搜索立减金(Voucher)相关业务规则"""
+    query_vector = self.embeddings.embed_query(query)
+    results = self.voucher_collection.query(
+      query_embeddings=[query_vector],
+      n_results=limit
+    )
+    
+    if results["documents"] and len(results["documents"][0]) > 0:
+      return results["documents"][0]
+    return []

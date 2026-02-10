@@ -12,7 +12,7 @@ import config.config as config
 import config.resource as resource
 from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
-from core.llm_tools import calculate_exchange_value, vector_search_icbc_mall, search_jd_promotion, get_points_activities
+from core.llm_tools import calculate_exchange_value, vector_search_icbc_mall, search_jd_promotion, get_points_activities, query_icbc_voucher_rules
 
 # --- 2. 状态定义与 Agent 逻辑 ---
 class AgentState(TypedDict):
@@ -42,7 +42,8 @@ class RedemptionAgent:
       calculate_exchange_value,
       vector_search_icbc_mall,
       search_jd_promotion,
-      get_points_activities
+      get_points_activities,
+      query_icbc_voucher_rules
     ]
 
     # 绑定工具
