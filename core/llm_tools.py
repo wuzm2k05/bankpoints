@@ -12,6 +12,33 @@ _log = logger.get_logger()
 # 每个工具都包含详尽的 Docstring，这是大模型理解工具的唯一途径
 
 @tool
+def get_point_redemption_rules():
+  """
+  获取工行积分兑换现金等价物（立减金、京东E卡）的官方基准汇率规则。
+  用于计算“曲线救国”购买方案的成本。
+  """
+  return {
+    "voucher_rate": config.get_icbc_mall_point_rate(),  # 立减金：1100积分 = 1元 (即55000分换50元)
+    "ecard_benchmark": "请通过 vector_search_icbc_mall('京东E卡') 获取实时E卡兑换比例，通常优于立减金",
+    "note": "立减金可用于京东所有商品(含第三方)；京东E卡仅限京东自营。"
+  }
+
+@tool
+def get_current_point_rate():
+  """
+  获取当前工行积分商城的兑换率（积分与人民币的换算关系）。
+  
+  用途：
+  当用户询问“工行积分值多少钱”、“兑换率是多少”或需要进行积分与现金价值换算时调用。
+  
+  返回值：
+  - float: 当前的兑换率。例如：1000 表示 1000 积分 = 1 元。
+  - str: 描述性话术，便于模型直接使用。例如：“当前工行积分兑换率为1000积分等于1元。”
+  """
+  rate = config.get_icbc_mall_point_rate()
+  _log.info(f"get_current_point_rate tool: 当前兑换率为 {rate} 积分/元")
+  return rate
+
 def calculate_exchange_value(points: int = 0, rmb_amount: float = 0.0):
   """
   进行工行积分与人民币现金价值的对等换算。
@@ -88,19 +115,20 @@ def search_jd_promotion(keyword: str):
       - price (float): 券后到手价。
       - promo_link (str): 推广URL。
       - source (str): 商品来源。
+      - support_ecard (bool): 是否支持京东e卡支付。
     None: 若无精确匹配则返回 None。
   """
   _log.info(f"search_jd_promotion tool: 搜索京东，关键词：{keyword}")
   
   # 模拟纯净的京东数据库：只包含京东本身的数据
   jd_database = [
-    {"name": "霸王茶姬代金券20元", "price": 20.0},
-    {"name": "禧天龙保鲜盒两件套H80407", "price": 18.9},
-    {"name": "特来电500元余额充值", "price": 500.0},
-    {"name": "小米米家桌面暖风机", "price": 89.0},
-    {"name": "雪碧 含糖雪碧 200mlx12罐", "price": 15.9},
-    {"name": "奈雪的茶代金券10元", "price": 6.6},
-    {"name": "华为Mate 60 Pro", "price": 5499.0}
+    {"name": "霸王茶姬代金券20元", "price": 20.0, "support_ecard": True},
+    {"name": "禧天龙保鲜盒两件套H80407", "price": 18.9, "support_ecard": False},
+    {"name": "特来电500元余额充值", "price": 500.0, "support_ecard": True},
+    {"name": "小米米家桌面暖风机", "price": 89.0, "support_ecard": False},
+    {"name": "雪碧 含糖雪碧 200mlx12罐", "price": 15.9, "support_ecard": False},
+    {"name": "奈雪的茶代金券10元", "price": 6.6, "support_ecard": True},
+    {"name": "华为Mate 60 Pro", "price": 5499.0, "support_ecard": True}
   ]
 
   match = next((item for item in jd_database if keyword in item["name"]), None)
@@ -110,7 +138,8 @@ def search_jd_promotion(keyword: str):
       "sku_name": f"京东自营-{match['name']}",
       "price": match["price"],
       "promo_link": f"https://u.jd.com/p?k={keyword}",
-      "source": "JD_MALL" # 明确来源，不包含任何建议
+      "source": "JD_MALL", # 明确来源，不包含任何建议
+      "support_ecard": match["support_ecard"]
     }
   
   return None

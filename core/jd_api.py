@@ -9,6 +9,20 @@ import log.logger as logger
 _log = logger.get_logger()
 
 class JDUnionClient:
+  # 2 个空格对齐
+  def is_ecard_eligible(item):
+    # 1. 基础判断：必须是自营 (owner == 'g')
+    if item.get("owner") != "g":
+      return False
+    
+    # 2. 排除特殊关键词（虚拟产品/禁区）
+    forbidden_keywords = ["充值", "点卡", "话费", "金条", "流量"]
+    sku_name = item.get("skuName", "")
+    if any(word in sku_name for word in forbidden_keywords):
+      return False
+      
+    return True
+
   def __init__(self):
     self.app_key = config.get_jd_app_key()
     self.app_secret = config.get_jd_app_secret()
