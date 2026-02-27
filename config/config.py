@@ -83,8 +83,8 @@ def get_jd_position_id():
 
 ################################################################################################
 ### icbc mall configurations
-def get_icbc_mall_point_rate():
-  return config.getint('icbc_mall', 'point_rate', fallback=int(os.environ.get('ICBC_MALL_POINT_RATE',1100)))
+def get_icbc_voucher_rate():
+  return config.getint('icbc_mall', 'voucher_rate', fallback=int(os.environ.get('ICBC_MALL_VOUCHER_RATE',1100)))
 
 ################################################################################################
 ### for files location

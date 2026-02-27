@@ -12,56 +12,20 @@ _log = logger.get_logger()
 # 每个工具都包含详尽的 Docstring，这是大模型理解工具的唯一途径
 
 @tool
-def get_point_redemption_rules():
+def get_ecard_voucher_rules():
   """
-  获取工行积分兑换现金等价物（立减金、京东E卡）的官方基准汇率规则。
-  用于计算“曲线救国”购买方案的成本。
+  获取工行积分兑换现金等价物（立减金、京东E卡）的基准汇率及基本说明。
+  
+  用途：
+  - 获取立减金(Voucher)的兑换比例（voucher_rate）。
+  - 获取京东E卡的比价指引（ecard_benchmark）。
+  - 获取立减金与E卡的使用范围差异说明（note）。
   """
   return {
-    "voucher_rate": config.get_icbc_mall_point_rate(),  # 立减金：1100积分 = 1元 (即55000分换50元)
+    "voucher_rate": config.get_icbc_voucher_rate(),  # 立减金：1100积分 = 1元 (即55000分换50元)
     "ecard_benchmark": "请通过 vector_search_icbc_mall('京东E卡') 获取实时E卡兑换比例，通常优于立减金",
     "note": "立减金可用于京东所有商品(含第三方)；京东E卡仅限京东自营。"
   }
-
-@tool
-def get_current_point_rate():
-  """
-  获取当前工行积分商城的兑换率（积分与人民币的换算关系）。
-  
-  用途：
-  当用户询问“工行积分值多少钱”、“兑换率是多少”或需要进行积分与现金价值换算时调用。
-  
-  返回值：
-  - float: 当前的兑换率。例如：1000 表示 1000 积分 = 1 元。
-  - str: 描述性话术，便于模型直接使用。例如：“当前工行积分兑换率为1000积分等于1元。”
-  """
-  rate = config.get_icbc_mall_point_rate()
-  _log.info(f"get_current_point_rate tool: 当前兑换率为 {rate} 积分/元")
-  return rate
-
-def calculate_exchange_value(points: int = 0, rmb_amount: float = 0.0):
-  """
-  进行工行积分与人民币现金价值的对等换算。
-  
-  Args:
-    points (int): 需要计算价值的工行积分总数。示例：100000。
-    rmb_amount (float): 需要折算为积分的现金金额。示例：200.5。
-    
-  Returns:
-    dict: 包含换算结果。
-      - result (float/int): 换算后的数值。
-      - unit (str): 单位（'元' 或 '积分'）。
-      - msg (str): 描述性话术。
-  """
-  _log.info(f"calculate_exchange_value tool: 计算兑换价值：points={points}, rmb_amount={rmb_amount}")
-  EXCHANGE_RATE = config.get_icbc_mall_point_rate() 
-  if points > 0:
-    val = round(points / EXCHANGE_RATE, 2)
-    return {"result": val, "unit": "元", "msg": f"{points}积分约价值{val}元"}
-  if rmb_amount > 0:
-    pts = int(rmb_amount * EXCHANGE_RATE)
-    return {"result": pts, "unit": "积分", "msg": f"{rmb_amount}元商品约需{pts}积分"}
-  return {"error": "参数无效，请提供积分或金额"}
 
 @tool
 def vector_search_icbc_mall(query: str):
@@ -169,10 +133,7 @@ def get_points_activities(gap_points: int = 0):
     "【运动达人】‘步数换积分’：通过手机银行同步步数，每日可兑换少量积分。"
   ]
   
-  # 在工具返回中植入汇率概念
-  rate = config.get_icbc_mall_point_rate()
-  rate_info = f"\n注：当前工行积分精算基准为 {rate} 积分 = 1 元。"
-  strategy_text = "\n".join(strategies) + rate_info
+  strategy_text = ""
   
   if gap_points <= 0:
     return f"为您汇总了当前主流攒分方案：\n{strategy_text}"
