@@ -18,7 +18,7 @@ from core.llm_tools import get_ecard_voucher_rules, vector_search_icbc_mall, sea
 class AgentState(TypedDict):
   # 这里的 operator.add 确保了历史消息的持久记忆
   messages: Annotated[List[BaseMessage], operator.add]
-  # 用于结构化存储提取出的积分（可选，当前主要依赖 message 历史）
+  # 用于结构化存储提取出的i豆（可选，当前主要依赖 message 历史）
   user_points: Optional[int]
 
 class RedemptionAgent:

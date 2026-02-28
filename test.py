@@ -146,7 +146,7 @@ class AgentTester:
 
   def _print_report(self, results):
     print("\n" + "="*70)
-    print("           工行积分精算管家 - 深度审计测试报告")
+    print("           工银i豆精算管家 - 深度审计测试报告")
     print("="*70)
     passed_num = sum(1 for x in results if x['passed'])
     

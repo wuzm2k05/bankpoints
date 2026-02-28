@@ -19,7 +19,7 @@ def interactive_search():
   # 确保你的 ICBCVectorDB 类在 core/icbc_db.py 中已经实现了 search 方法
   try:
     db = ICBCVectorDB()
-    _log.info("=== 工行积分商城 · 语义搜索系统 ===")
+    _log.info("=== 工银i豆商城 · 语义搜索系统 ===")
     _log.info("输入 'exit' 或 'quit' 退出程序。")
   except Exception as e:
     _log.error(f"初始化失败: {e}")

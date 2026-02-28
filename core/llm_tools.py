@@ -14,23 +14,23 @@ _log = logger.get_logger()
 @tool
 def get_ecard_voucher_rules():
   """
-  获取工行积分兑换现金等价物（立减金、京东E卡）的基准汇率及基本说明。
+  获取工银i豆兑换现金等价物（立减金、京东E卡）的基准兑换比率及基本说明。
   
   用途：
-  - 获取立减金(Voucher)的兑换比例（voucher_rate）。
+  - 获取立减金(Voucher)的兑换比率（voucher_rate）。
   - 获取京东E卡的比价指引（ecard_benchmark）。
   - 获取立减金与E卡的使用范围差异说明（note）。
   """
   return {
-    "voucher_rate": config.get_icbc_voucher_rate(),  # 立减金：1100积分 = 1元 (即55000分换50元)
-    "ecard_benchmark": "请通过 vector_search_icbc_mall('京东E卡') 获取实时E卡兑换比例，通常优于立减金",
+    "voucher_rate": config.get_icbc_voucher_rate(),  # 立减金：1100工银i豆 = 1元 (即55000豆换50元)
+    "ecard_benchmark": "请通过 vector_search_icbc_mall('京东E卡') 获取实时E卡兑换比率，通常优于立减金",
     "note": "立减金可用于京东所有商品(含第三方)；京东E卡仅限京东自营。"
   }
 
 @tool
 def vector_search_icbc_mall(query: str):
   """
-  【核心指令】调用此工具检索工行积分商城中的商品候选列表，此数据库为向量数据库。
+  【核心指令】调用此工具检索工银i豆商城中的商品候选列表，此数据库为向量数据库。
   
   重要操作规范：
   1. 语义筛选：返回结果基于向量相似度，可能包含噪音（如搜“电影”出现“肯德基”）。你必须作为审计员，剔除任何不符合用户意图的商品。
@@ -41,10 +41,10 @@ def vector_search_icbc_mall(query: str):
   Returns:
     list[dict]: 商品字典列表。每个字典包含:
       - name (str): 商品官方全称。
-      - points (int): 兑换该商品所需的工行积分数。
+      - points (int): 兑换该商品所需的工银i豆数。
       - distance (float): 语义距离（仅供你参考相关度，越小越相关）。
   """
-  _log.info(f"vector_search_icbc_mall tool: 搜索工行积分商城，查询语句：{query}")
+  _log.info(f"vector_search_icbc_mall tool: 搜索工银i豆商城，查询语句：{query}")
   icbc_db = ICBCVectorDB()
   results = icbc_db.search(query, limit=3)
   
@@ -68,7 +68,7 @@ def vector_search_icbc_mall(query: str):
 @tool
 def search_jd_promotion(keyword: str):
   """
-  在京东平台搜索指定商品的同款，并获取实时价格和带佣金的推广链接。
+  在京东平台搜索指定商品的同款，并获取实时价格的商品链接。
   
   Args:
     keyword (str): 要在京东比价的精确商品名称。
@@ -77,7 +77,7 @@ def search_jd_promotion(keyword: str):
     dict: 京东数据。
       - sku_name (str): 京东商品名。
       - price (float): 券后到手价。
-      - promo_link (str): 推广URL。
+      - promo_link (str): 商品链接。
       - source (str): 商品来源。
       - support_ecard (bool): 是否支持京东e卡支付。
     None: 若无精确匹配则返回 None。
@@ -111,37 +111,37 @@ def search_jd_promotion(keyword: str):
 @tool
 def get_points_activities(gap_points: int = 0):
   """
-  获取工行积分的积累攻略、官方活动详情及快速攒分建议。
+  获取工银i豆的积累攻略、官方活动详情及快速攒豆建议。
   
   【触发场景】：
-  1. 用户主动询问“如何获得积分”、“怎么攒分”、“有什么活动”。
-  2. 用户积分不足以兑换目标商品时，用于计算补齐方案。
-  3. 寻求积分最大化积累策略时。
+  1. 用户主动询问“如何获得工银i豆”、“怎么攒豆”、“有什么活动”。
+  2. 用户工银i豆不足以兑换目标商品时，用于计算补齐方案。
+  3. 寻求工银i豆最大化积累策略时。
 
   Args:
-    gap_points (int): 可选。用户当前缺少的积分差额。若为 0 则返回常规积累攻略。
+    gap_points (int): 可选。用户当前缺少的工银i豆差额。若为 0 则返回常规积累攻略。
     
   Returns:
     str: 包含具体活动名称、奖励额度及操作建议的详细话术。
   """
-  _log.info(f"get_points_activities tool: 获取积分活动，gap_points={gap_points}")
+  _log.info(f"get_points_activities tool: 获取工银i豆活动，gap_points={gap_points}")
   # 模拟从数据库或配置中读取的最新活动信息
   strategies = [
-    "【日常必备】手机银行‘任务中心’：每日签到、浏览产品可得 100-500 积分。",
-    "【高额奖励】‘工行月月刷’：信用卡消费达标，单月最高获 5 万积分奖励。",
-    "【低门槛】‘微信支付/支付宝立减金转积分’：部分商户活动可通过消费返分。",
-    "【运动达人】‘步数换积分’：通过手机银行同步步数，每日可兑换少量积分。"
+    "【日常必备】手机银行‘任务中心’：每日签到、浏览产品可得 100-500 工银i豆。",
+    "【高额奖励】‘工行月月刷’：信用卡消费达标，单月最高获 5 万工银i豆奖励。",
+    "【低门槛】‘微信支付/支付宝立减金转工银i豆’：部分商户活动可通过消费返豆。",
+    "【运动达人】‘步数换i豆’：通过手机银行同步步数，每日可兑换少量工银i豆。"
   ]
   
   strategy_text = ""
   
   if gap_points <= 0:
-    return f"为您汇总了当前主流攒分方案：\n{strategy_text}"
+    return f"为您汇总了当前主流攒豆方案：\n{strategy_text}"
   
   if gap_points < 10000:
-    return f"您的积分缺口较小（{gap_points}分），建议：\n1. 连续签到一周 \n2. 参加‘步数换积分’活动，可快速补齐。"
+    return f"您的工银i豆缺口较小（{gap_points}豆），建议：\n1. 连续签到一周 \n2. 参加‘步数换i豆’活动，可快速补齐。"
   
-  return f"您的缺口较大（{gap_points}分），建议重点关注：\n1. ‘工行月月刷’活动（最高5万分）\n2. 办理特定多倍积分信用卡。"
+  return f"您的缺口较大（{gap_points}豆），建议重点关注：\n1. ‘工行月月刷’活动（最高5万工银i豆）\n2. 办理特定多倍i豆信用卡。"
 
 @tool
 def query_icbc_voucher_rules(query: str) -> str:
@@ -159,7 +159,7 @@ def query_icbc_voucher_rules(query: str) -> str:
   1. 状态查询：立减金没到账、卡包里找不到、金额显示异常。
   2. 提取操作：什么是待发立减金、如何手动提取、在哪查看订单。
   3. 使用限制：单笔叠加数量（8张）、面额拆分原因（1/10/100元批次）、有效期（5-10天）。
-  4. 报错排障：支付失败、e支付密码错误、显示“该商户只允许积分兑换”。
+  4. 报错排障：支付失败、e支付密码错误、显示“该商户只允许工银i豆兑换”。
   
   返回值：
   - 返回相关的 Q&A 知识片段（字符串）。如果未找到匹配项，则返回提示信息。
