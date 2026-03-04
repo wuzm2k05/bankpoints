@@ -1,18 +1,16 @@
+# 2 个空格对齐
 from langchain_core.tools import tool
 import random
+import httpx # 建议用于异步 HTTP 请求
+from loguru import logger as _log
 
 import config.config as config
-
 from core.icbc_db import ICBCVectorDB
-import log.logger as logger
-
-_log = logger.get_logger()
 
 # --- 1. 定义工具集 (Tools) ---
-# 每个工具都包含详尽的 Docstring，这是大模型理解工具的唯一途径
 
 @tool
-def get_ecard_voucher_rules():
+async def get_ecard_voucher_rules():
   """
   获取工银i豆兑换现金等价物（立减金、京东E卡）的基准兑换比率及基本说明。
   
@@ -22,51 +20,35 @@ def get_ecard_voucher_rules():
   - 获取立减金与E卡的使用范围差异说明（note）。
   """
   return {
-    "voucher_rate": config.get_icbc_voucher_rate(),  # 立减金：1100工银i豆 = 1元 (即55000豆换50元)
+    "voucher_rate": config.get_icbc_voucher_rate(), 
     "ecard_benchmark": "请通过 vector_search_icbc_mall('京东E卡') 获取实时E卡兑换比率，通常优于立减金",
     "note": "立减金可用于京东所有商品(含第三方)；京东E卡仅限京东自营。"
   }
 
 @tool
-def vector_search_icbc_mall(query: str):
+async def vector_search_icbc_mall(query: str):
   """
   【核心指令】调用此工具检索工银i豆商城中的商品候选列表，此数据库为向量数据库。
   
   重要操作规范：
-  1. 语义筛选：返回结果基于向量相似度，可能包含噪音（如搜“电影”出现“肯德基”）。你必须作为审计员，剔除任何不符合用户意图的商品。
+  1. 语义筛选：返回结果基于向量相似度，可能包含噪音。你必须作为审计员，剔除任何不符合用户意图的商品。
 
   Args:
     query (str): 用户的原始需求、意图关键词或具体的商品名称。
     
   Returns:
-    list[dict]: 商品字典列表。每个字典包含:
-      - name (str): 商品官方全称。
-      - points (int): 兑换该商品所需的工银i豆数。
-      - distance (float): 语义距离（仅供你参考相关度，越小越相关）。
+    list[dict]: 商品字典列表。每个字典包含: name, points, distance。
   """
-  _log.info(f"vector_search_icbc_mall tool: 搜索工银i豆商城，查询语句：{query}")
+  _log.info("vector_search_icbc_mall tool: 搜索工银i豆商城，查询语句：{}", query)
+  
+  # 假设 ICBCVectorDB 已经支持异步搜索，或者在内部处理了线程池
   icbc_db = ICBCVectorDB()
-  results = icbc_db.search(query, limit=3)
+  results = await icbc_db.asearch(query, limit=3) 
   
-  """
-  # 定义相似度阈值
-  # 对于 DashScope 向量模型，通常 distance < 0.4 或 0.5 属于比较相关的范围
-  # 你可以根据实际测试结果微调这个数字
-  DISTANCE_THRESHOLD = 0.5
-  
-  output = []
-  for item in results:
-    # 你需要根据 distance 来判断这个商品是否真正相关
-    # 如果 distance 超过阈值，说明这个商品可能只是表面相关，但实际上不符合用户需求
-    if item["distance"] <= DISTANCE_THRESHOLD:
-      output.append(item)
-  
-  return output
-  """
   return results
 
 @tool
-def search_jd_promotion(keyword: str):
+async def search_jd_promotion(keyword: str):
   """
   在京东平台搜索指定商品的同款，并获取实时价格的商品链接。
   
@@ -74,17 +56,11 @@ def search_jd_promotion(keyword: str):
     keyword (str): 要在京东比价的精确商品名称。
     
   Returns:
-    dict: 京东数据。
-      - sku_name (str): 京东商品名。
-      - price (float): 券后到手价。
-      - promo_link (str): 商品链接。
-      - source (str): 商品来源。
-      - support_ecard (bool): 是否支持京东e卡支付。
-    None: 若无精确匹配则返回 None。
+    dict: 京东数据。包含 sku_name, price, promo_link, support_ecard 等。
   """
-  _log.info(f"search_jd_promotion tool: 搜索京东，关键词：{keyword}")
+  _log.info("search_jd_promotion tool: 搜索京东，关键词：{}", keyword)
   
-  # 模拟纯净的京东数据库：只包含京东本身的数据
+  # 模拟异步 IO 操作（实际场景可换成 httpx 请求）
   jd_database = [
     {"name": "霸王茶姬代金券20元", "price": 20.0, "support_ecard": True},
     {"name": "禧天龙保鲜盒两件套H80407", "price": 18.9, "support_ecard": False},
@@ -102,80 +78,53 @@ def search_jd_promotion(keyword: str):
       "sku_name": f"京东自营-{match['name']}",
       "price": match["price"],
       "promo_link": f"https://u.jd.com/p?k={keyword}",
-      "source": "JD_MALL", # 明确来源，不包含任何建议
+      "source": "JD_MALL",
       "support_ecard": match["support_ecard"]
     }
   
   return None
   
 @tool
-def get_points_activities(gap_points: int = 0):
+async def get_points_activities(gap_points: int = 0):
   """
   获取工银i豆的积累攻略、官方活动详情及快速攒豆建议。
-  
-  【触发场景】：
-  1. 用户主动询问“如何获得工银i豆”、“怎么攒豆”、“有什么活动”。
-  2. 用户工银i豆不足以兑换目标商品时，用于计算补齐方案。
-  3. 寻求工银i豆最大化积累策略时。
-
-  Args:
-    gap_points (int): 可选。用户当前缺少的工银i豆差额。若为 0 则返回常规积累攻略。
-    
-  Returns:
-    str: 包含具体活动名称、奖励额度及操作建议的详细话术。
   """
-  _log.info(f"get_points_activities tool: 获取工银i豆活动，gap_points={gap_points}")
-  # 模拟从数据库或配置中读取的最新活动信息
+  _log.info("get_points_activities tool: 获取活动，gap_points={}", gap_points)
+  
   strategies = [
-    "【日常必备】手机银行‘任务中心’：每日签到、浏览产品可得 100-500 工银i豆。",
-    "【高额奖励】‘工行月月刷’：信用卡消费达标，单月最高获 5 万工银i豆奖励。",
-    "【低门槛】‘微信支付/支付宝立减金转工银i豆’：部分商户活动可通过消费返豆。",
-    "【运动达人】‘步数换i豆’：通过手机银行同步步数，每日可兑换少量工银i豆。"
+    "【日常必备】手机银行‘任务中心’：每日签到可得 100-500 工银i豆。",
+    "【高额奖励】‘工行月月刷’：信用卡消费达标，最高获 5 万工银i豆。",
+    "【运动达人】‘步数换i豆’：手机银行同步步数兑换。"
   ]
   
-  strategy_text = ""
+  strategy_text = "\n".join(strategies)
   
   if gap_points <= 0:
     return f"为您汇总了当前主流攒豆方案：\n{strategy_text}"
   
   if gap_points < 10000:
-    return f"您的工银i豆缺口较小（{gap_points}豆），建议：\n1. 连续签到一周 \n2. 参加‘步数换i豆’活动，可快速补齐。"
+    return f"您的缺口较小（{gap_points}豆），建议：\n1. 连续签到一周 \n2. 参加‘步数换i豆’。"
   
-  return f"您的缺口较大（{gap_points}豆），建议重点关注：\n1. ‘工行月月刷’活动（最高5万工银i豆）\n2. 办理特定多倍i豆信用卡。"
+  return f"您的缺口较大（{gap_points}豆），建议关注：\n1. ‘工行月月刷’活动 \n2. 办理特定多倍i豆信用卡。"
 
 @tool
-def query_icbc_voucher_rules(query: str) -> str:
+async def query_icbc_voucher_rules(query: str) -> str:
   """
   【业务工具：工行立减金/微信立减金规则查询】
-  
-  用途：
-  当用户咨询关于“工行微信立减金”（Voucher）的任何业务逻辑、操作流程或故障排障时调用。
-  立减金不同于直接折扣(Discount)，它是一种支付抵扣凭证。
-  
-  参数描述：
-  - query (str): 用户的原始问题或提炼后的业务关键词。例如：“立减金有效期”、“为什么到账金额不对”、“待发提取流程”。
-  
-  适用场景包括但不限于：
-  1. 状态查询：立减金没到账、卡包里找不到、金额显示异常。
-  2. 提取操作：什么是待发立减金、如何手动提取、在哪查看订单。
-  3. 使用限制：单笔叠加数量（8张）、面额拆分原因（1/10/100元批次）、有效期（5-10天）。
-  4. 报错排障：支付失败、e支付密码错误、显示“该商户只允许工银i豆兑换”。
-  
-  返回值：
-  - 返回相关的 Q&A 知识片段（字符串）。如果未找到匹配项，则返回提示信息。
-  - 模型应基于返回的片段进行二次加工，以亲和、专业的语气回复客户。
+  当用户咨询关于“工行微信立减金”（Voucher）的任何业务逻辑时调用。
   """
   try:
+    _log.info("query_icbc_voucher_rules tool: 查询规则，query={}", query)
     db = ICBCVectorDB()
-    # 检索最相关的 2 条规则
-    results = db.search_voucher_info(query, limit=2)
+    # 异步检索规则
+    results = await db.asearch_voucher_info(query, limit=2)
     
     if not results:
-      return "数据库中暂无关于此问题的特定规则。请引导用户核实：1.是否开通e支付；2.微信卡包历史记录；或建议联系人工客服。"
+      return "数据库中暂无特定规则。请引导用户核实e支付开通情况或联系客服。"
       
-    # 合并检索到的知识点
     context = "\n---\n".join(results)
     return f"找到以下相关业务规则：\n{context}"
     
   except Exception as e:
-    return f"工具调用异常，无法获取立减金规则。错误详情：{str(e)}"
+    _log.error("查询立减金规则时出错: {}", str(e))
+    return f"工具调用异常: {str(e)}"

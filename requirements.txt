@@ -20,3 +20,4 @@ uvicorn
 websockets
 langgraph-checkpoint-redis
 dashscope
+loguru

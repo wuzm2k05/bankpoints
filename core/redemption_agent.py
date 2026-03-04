@@ -1,10 +1,12 @@
 # 2 个空格对齐
 import operator
-import redis
-from typing import Annotated, List, TypedDict, Dict, Optional, Literal, Union
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
-from langchain_core.tools import tool
+import json
+from typing import Annotated, List, TypedDict, Optional, Dict, Any
+from loguru import logger as _log
+
+# 异步组件导入
+from redis.asyncio import Redis as AsyncRedis
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
@@ -12,32 +14,40 @@ import config.config as config
 import config.resource as resource
 from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
-from core.llm_tools import get_ecard_voucher_rules, vector_search_icbc_mall, search_jd_promotion, get_points_activities, query_icbc_voucher_rules
+from core.llm_tools import (
+  get_ecard_voucher_rules, 
+  vector_search_icbc_mall, 
+  search_jd_promotion, 
+  get_points_activities, 
+  query_icbc_voucher_rules
+)
 
-# --- 2. 状态定义与 Agent 逻辑 ---
+# --- 1. 状态定义 ---
 class AgentState(TypedDict):
-  # 这里的 operator.add 确保了历史消息的持久记忆
+  # 这里的 operator.add 用于合并消息历史
   messages: Annotated[List[BaseMessage], operator.add]
-  # 用于结构化存储提取出的i豆（可选，当前主要依赖 message 历史）
   user_points: Optional[int]
 
 class RedemptionAgent:
   def __init__(self):
+    # 1. 获取支持异步的 LLM 实例
     self.llm = model_factory.get_model()
 
-    # 初始化持久化层
-    self.redis_client = redis.Redis(
+    # 2. 初始化异步 Redis 客户端
+    self.redis_client = AsyncRedis(
       host=config.get_redis_host(),
       port=config.get_redis_port(),
       db=0,
-      decode_responses=False
+      decode_responses=False # 注意：Saver 内部可能需要原始 bytes 进行 Pickle
     )
 
+    # 3. 初始化异步持久化层
     self.checkpointer = SimpleRedisSaver(
       redis_client=self.redis_client,
       ttl=config.get_redis_msg_ttl_in_seconds()
     )
 
+    # 4. 注册工具
     self.tools = [
       get_ecard_voucher_rules,
       vector_search_icbc_mall,
@@ -46,107 +56,114 @@ class RedemptionAgent:
       query_icbc_voucher_rules
     ]
 
-    # 绑定工具
+    # 5. 绑定工具并构建异步工作流
     self.model_with_tools = self.llm.bind_tools(self.tools)
     self.tool_node = ToolNode(self.tools)
-
-    # 编译工作流
     self.app = self._build_workflow().compile(
       checkpointer=self.checkpointer
     )
-
-  def _call_model(self, state: AgentState):
-    """大脑节点：执行带有审计和精算指令的决策"""
-    # 从资源文件获取你刚才写的那个精妙的 System Prompt
-    system_prompt = resource.get_resource()["default_values"]["analyze_intent_system_prompt"]
-
-    # 这里的 state["messages"] 已经包含了通过 thread_id 捞回的历史记录
-    messages = [HumanMessage(content=system_prompt)] + state["messages"]
-
-    response = self.model_with_tools.invoke(messages)
-    return {"messages": [response]}
-
-  def _router(self, state: AgentState):
-    """路由逻辑：判断是需要调用工具还是直接结束"""
-    last_msg = state["messages"][-1]
-    if last_msg.tool_calls:
-      return "tools"
-    return END
+    _log.info("RedemptionAgent 异步工作流编译完成")
 
   def _build_workflow(self):
-    """构建 LangGraph 状态机"""
+    """构建 LangGraph 异步状态机"""
     workflow = StateGraph(AgentState)
 
     workflow.add_node("agent", self._call_model)
     workflow.add_node("tools", self.tool_node)
 
     workflow.set_entry_point("agent")
-    
-    # 动态决策路径
     workflow.add_conditional_edges("agent", self._router)
     workflow.add_edge("tools", "agent")
 
     return workflow
 
-  def chat(self, user_input: str, thread_id: str):
-    """
-    对外统一对话接口
-    thread_id 用于 Redis 隔离不同用户的对话上下文
-    """
-    config_dict = {"configurable": {"thread_id": thread_id}}
+  async def _call_model(self, state: AgentState):
+    """异步大脑节点"""
+    system_prompt = resource.get_resource()["default_values"]["analyze_intent_system_prompt"]
+    messages = [SystemMessage(content=system_prompt)] + state["messages"]
     
-    # 构造输入，LangGraph 会自动合并到 state["messages"] 中
-    inputs = {
-      "messages": [HumanMessage(content=user_input)]
-    }
+    # 异步调用模型
+    response = await self.model_with_tools.ainvoke(messages)
+    return {"messages": [response]}
 
-    # 执行工作流（自动处理重试和工具调用循环）
-    final_state = self.app.invoke(inputs, config=config_dict)
-    
-    # 返回模型最后的回复内容
-    return final_state["messages"][-1].content
-  
-  def chat_with_trace(self, user_input: str, thread_id: str):
-    """
-    对外统一对话接口，支持返回工具调用轨迹 (Trace)
-    返回：(最终回复内容, 工具调用轨迹列表)
-    """
-    config_dict = {"configurable": {"thread_id": thread_id}}
-    inputs = {
-      "messages": [HumanMessage(content=user_input)]
-    }
+  def _router(self, state: AgentState):
+    """路由逻辑"""
+    last_msg = state["messages"][-1]
+    if last_msg.tool_calls:
+      return "tools"
+    return END
 
-    # 1. 执行工作流，获取完整的状态
-    final_state = self.app.invoke(inputs, config=config_dict)
+  async def get_history(self, user_id: str) -> List[Dict]:
+    """
+    异步获取历史记录接口
+    """
+    config_dict = {"configurable": {"thread_id": user_id}}
+    state = await self.app.aget_state(config_dict)
     
-    # 2. 提取最终回复
-    final_content = final_state["messages"][-1].content
-    
-    # 3. 提取本次对话触发的工具轨迹
-    # 我们只关注最后一次用户输入之后产生的 Tool 调用
-    trace = []
-    
-    # 倒序查找，直到遇到本次输入的 HumanMessage 停止
-    for msg in reversed(final_state["messages"][:-1]):
-      if isinstance(msg, HumanMessage):
-        break
-        
-      # 如果是包含工具调用的 AIMessage
-      if isinstance(msg, AIMessage) and msg.tool_calls:
-        for tc in msg.tool_calls:
-          # 寻找对应的 ToolMessage (结果)
-          # 在 LangGraph 中，ToolMessage 的 tool_call_id 会匹配 AIMessage 的 id
-          tool_result = next(
-            (m.content for m in final_state["messages"] 
-             if isinstance(m, ToolMessage) and m.tool_call_id == tc["id"]), 
-            "No result found"
-          )
-          
-          trace.append({
-            "tool": tc["name"],
-            "input": tc["args"],
-            "output": tool_result
-          })
-          
-    # 因为是倒序提取的，最后翻转一下顺序使其符合时间线
-    return final_content, list(reversed(trace))
+    history = []
+    if state and "messages" in state.values:
+      for msg in state.values["messages"]:
+        role = "user" if isinstance(msg, HumanMessage) else "assistant"
+        # 过滤掉工具调用的中间报文，只给前端看对话
+        if isinstance(msg, (HumanMessage, AIMessage)) and msg.content:
+          history.append({"role": role, "content": msg.content})
+    return history
+
+  async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any,with_trace: bool = False):
+    """
+    异步流式对话接口
+    通过 websocket 实时推送 token 和工具执行轨迹
+    """
+    config_dict = {"configurable": {"thread_id": user_id}}
+    inputs = {"messages": [HumanMessage(content=user_input)]}
+
+    try:
+      # 使用 astream 异步流式迭代
+      # stream_mode="values" 会在每次节点更新时返回完整状态
+      # stream_mode="updates" 会返回当前节点的增量更新
+      async for event in self.app.astream(
+        inputs, 
+        config=config_dict, 
+        stream_mode="updates"
+      ):
+        for node_name, output in event.items():
+          # 1. 处理工具执行轨迹推送
+          if node_name == "tools" and with_trace:
+            for msg in output.get("messages", []):
+              if isinstance(msg, ToolMessage):
+                await websocket.send_json({
+                  "userCode": user_id,
+                  "seq": seq,
+                  "type": "trace",
+                  "data": {
+                    "tool": msg.name,
+                    "output": str(msg.content)[:200] + "..." # 截断过长输出
+                  }
+                })
+
+          # 2. 处理 Agent 的最终文本输出
+          elif node_name == "agent":
+            last_msg = output["messages"][-1]
+            if not last_msg.tool_calls and last_msg.content:
+              # 推送最终文本
+              await websocket.send_json({
+                "userCode": user_id,
+                "seq": seq,
+                "type": "answer",
+                "content": last_msg.content,
+                "status": "success"
+              })
+
+    except Exception as e:
+      _log.exception("stream_chat 运行异常")
+      await websocket.send_json({
+        "userCode": user_id,
+        "seq": seq,
+        "type": "error",
+        "content": f"服务异常: {str(e)}"
+      })
+
+  async def close_resource(self):
+    """清理资源，在 lifespan 的 yield 之后调用"""
+    await self.redis_client.close()
+    _log.info("Agent Redis 连接已关闭")

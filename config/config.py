@@ -15,6 +15,30 @@ def parse_config():
 
 # if we need to reload the config file, need to use another configparser to read the file again
 config = parse_config()
+
+
+################################################################################################
+### server config
+def get_server_port():
+  return config.getint('server','port',fallback=int(os.environ.get('SERVER_PORT', 443)))
+
+def get_server_host():
+  return config.get('server','host', fallback=os.environ.get('SERVER_HOST', '0.0.0.0'))
+
+# 0 means using the default value of the framework, which is usually the number of CPU cores
+def get_server_process_num():
+  return config.getint('server','process_num', fallback=int(os.environ.get('SERVER_PROCESS_NUM', 0)))
+
+def get_max_thread_workers():
+  return config.getint('server','max_thread_workers', fallback=int(os.environ.get('MAX_THREAD_WORKERS', 0)))
+################################################################################################
+### tls configurations
+def get_certificate_chain_file():
+  return config.get('tls', 'certificate_chain_file', fallback=os.environ.get('CERTIFICATE_CHAIN_FILE',"data/certificate_chain_file.pem"))
+
+def get_private_key_file():
+  return config.get('tls', 'private_key_file', fallback=os.environ.get('PRIVATE_KEY_FILE',"data/private.key"))
+
 ################################################################################################
 ### deepseek api config
 def get_deepseek_api_key():
