@@ -57,6 +57,18 @@ class SimpleRedisSaver(BaseCheckpointSaver):
     self.ttl = ttl
     self.serde = CrossCompatibleSerializer()
 
+  def get_tuple(self, config: dict):
+    raise NotImplementedError("Use aget_tuple instead")
+
+  def put(self, config: dict, checkpoint: Any, metadata: Any, new_versions: dict):
+    raise NotImplementedError("Use aput instead")
+
+  def put_writes(self, config: dict, writes: Sequence[Any], task_id: str):
+    raise NotImplementedError("Use aput_writes instead")
+
+  def list(self, config: dict, *, before: Optional[dict] = None, limit: Optional[int] = None):
+    raise NotImplementedError("Use alist instead")
+  
   # 1. 异步存储快照
   async def aput(self, config: dict, checkpoint: Any, metadata: Any, new_versions: dict) -> dict:
     thread_id = str(config["configurable"]["thread_id"])

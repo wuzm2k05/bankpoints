@@ -72,11 +72,13 @@ Requst： 除通用内容外，需要下面内容
     "type": "chat"
     "userCode": "identifier of user"
     "prompt": "prompt of user",
+    "enableTrace": False, 
 }
 ```
 type: 必须填chat。
 userCode: 参照loadUserHistory的说明。后端会存储这个用户的说明上下文，使用userCode来使用对应的上下文以便更好理解用户此次的目的。
 prompt：用户此次的输入。用户可能进行多轮对话，这里面仅包含此次用户的输入。（原来的输入和回答都会存在后端的用户上下文中）
+enableTrace: 让服务器返回思考的中间过程，方便显示进度给客户或者用来调试。
 
 Response：除通用内容外，包含下面内容
 ```
@@ -86,10 +88,16 @@ Response：除通用内容外，包含下面内容
     "answer": "answer of AI",
 
     "status": "success / fail / end"
+
+    "isTrace": True / false
+    "data": {}
 }
 ```
 userCode: 同loadUserHistory。
 answer: AI对用户请求的本次回答。以markdown格式返回。
+
+isTrace: 标识这个回复的answer部分为trace信息，非正常的ai回复。
+data：存放更多的工具输出。暂时不用
 
 chat请求的response可能是多个。最后一个的status会标记为end。每个response的answer包含了部分的内容，后端保证按逻辑顺序（分片顺序）发送。前端需按接收顺序拼接 answer 内容。
 如果中间出现错误，返回了status为fail的response，那么后续不会有response了，当然也不会有status为end的response。

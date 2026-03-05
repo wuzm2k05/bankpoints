@@ -79,6 +79,7 @@ class RedemptionAgent:
 
   async def _call_model(self, state: AgentState):
     """异步大脑节点"""
+    _log.debug("--- 正在调用 LLM ---") # 添加这一行
     system_prompt = resource.get_resource()["default_values"]["analyze_intent_system_prompt"]
     messages = [SystemMessage(content=system_prompt)] + state["messages"]
     
@@ -109,58 +110,92 @@ class RedemptionAgent:
           history.append({"role": role, "content": msg.content})
     return history
 
-  async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any,with_trace: bool = False):
+  async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
     """
-    异步流式对话接口
-    通过 websocket 实时推送 token 和工具执行轨迹
+    异步流式对话接口：保持 type 为 chat，通过 isTrace 区分内容
     """
+    _log.debug("stream_chat 开始执行, seq: {}", seq)
+    
     config_dict = {"configurable": {"thread_id": user_id}}
     inputs = {"messages": [HumanMessage(content=user_input)]}
+    has_sent_answer = False
 
     try:
-      # 使用 astream 异步流式迭代
-      # stream_mode="values" 会在每次节点更新时返回完整状态
-      # stream_mode="updates" 会返回当前节点的增量更新
       async for event in self.app.astream(
         inputs, 
         config=config_dict, 
         stream_mode="updates"
       ):
         for node_name, output in event.items():
-          # 1. 处理工具执行轨迹推送
-          if node_name == "tools" and with_trace:
-            for msg in output.get("messages", []):
-              if isinstance(msg, ToolMessage):
-                await websocket.send_json({
-                  "userCode": user_id,
+          # 1. 处理 Trace (中间过程)
+          if with_trace:
+            trace_msg = None
+            if node_name == "tools":
+              msgs = output.get("messages", [])
+              if msgs and isinstance(msgs[-1], ToolMessage):
+                tool_msg = msgs[-1]
+                trace_msg = {
                   "seq": seq,
-                  "type": "trace",
-                  "data": {
-                    "tool": msg.name,
-                    "output": str(msg.content)[:200] + "..." # 截断过长输出
-                  }
+                  "type": "chat",
+                  "userCode": user_id,
+                  "status": "success",
+                  "isTrace": True,
+                  "answer": f"正在通过 {tool_msg.name} 查询相关信息...",
+                  "data": {"tool": tool_msg.name, "output": str(tool_msg.content)[:100]}
+                }
+            elif node_name == "agent":
+              # 只有当接下来还要调工具时，才发送“思考中”的 trace
+              last_msg = output.get("messages", [])[-1]
+              if getattr(last_msg, 'tool_calls', None):
+                trace_msg = {
+                  "seq": seq,
+                  "type": "chat",
+                  "userCode": user_id,
+                  "status": "success",
+                  "isTrace": True,
+                  "answer": "AI 正在分析需求并准备调用工具..."
+                }
+
+            if trace_msg:
+              await websocket.send_json(trace_msg)
+
+          # 2. 处理正式 Answer (最终回答)
+          if node_name == "agent":
+            messages = output.get("messages", [])
+            if messages:
+              last_msg = messages[-1]
+              # 仅当没有 tool_calls 时，才认为这是发给用户的最终文本
+              if last_msg.content and not getattr(last_msg, 'tool_calls', None):
+                has_sent_answer = True
+                await websocket.send_json({
+                  "seq": seq,
+                  "type": "chat",
+                  "userCode": user_id,
+                  "status": "success",
+                  "isTrace": False,
+                  "answer": last_msg.content
                 })
 
-          # 2. 处理 Agent 的最终文本输出
-          elif node_name == "agent":
-            last_msg = output["messages"][-1]
-            if not last_msg.tool_calls and last_msg.content:
-              # 推送最终文本
-              await websocket.send_json({
-                "userCode": user_id,
-                "seq": seq,
-                "type": "answer",
-                "content": last_msg.content,
-                "status": "success"
-              })
+      # 3. 发送结束标志
+      await websocket.send_json({
+        "seq": seq,
+        "type": "chat",
+        "userCode": user_id,
+        "status": "end",
+        "isTrace": False,
+        "answer": "" if has_sent_answer else "未搜索到相关结果。"
+      })
 
     except Exception as e:
-      _log.exception("stream_chat 运行异常")
+      _log.error("流式对话异常: {}", e)
       await websocket.send_json({
-        "userCode": user_id,
         "seq": seq,
-        "type": "error",
-        "content": f"服务异常: {str(e)}"
+        "type": "chat",
+        "userCode": user_id,
+        "status": "fail",
+        "isTrace": False,
+        "errorCode": "500",
+        "errorMsg": str(e)
       })
 
   async def close_resource(self):
