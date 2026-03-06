@@ -9,22 +9,23 @@ from core.icbc_db import ICBCVectorDB
 
 # --- 1. 定义工具集 (Tools) ---
 
-@tool
-async def get_ecard_voucher_rules():
-  """
-  获取工银i豆兑换现金等价物（立减金、京东E卡）的基准兑换比率及基本说明。
-  
-  用途：
-  - 获取立减金(Voucher)的兑换比率（voucher_rate）。
-  - 获取京东E卡的比价指引（ecard_benchmark）。
-  - 获取立减金与E卡的使用范围差异说明（note）。
-  """
-  _log.debug("get_ecard_voucher_rules tool: 获取工银i豆兑换规则")
-  return {
-    "voucher_rate": config.get_icbc_voucher_rate(), 
-    "ecard_benchmark": "请通过 vector_search_icbc_mall('京东E卡') 获取实时E卡兑换比率，通常优于立减金",
-    "note": "立减金可用于京东所有商品(含第三方)；京东E卡仅限京东自营。"
-  }
+
+#@tool
+#async def get_ecard_voucher_rules():
+#  """
+#  获取工银i豆兑换现金等价物（立减金、京东E卡）的基准兑换比率及基本说明。
+#  
+#  用途：
+#  - 获取立减金(Voucher)的兑换比率（voucher_rate）。
+#  - 获取京东E卡的比价指引（ecard_benchmark）。
+#  - 获取立减金与E卡的使用范围差异说明（note）。
+#  """
+#  _log.debug("get_ecard_voucher_rules tool: 获取工银i豆兑换规则")
+#  return {
+#    "voucher_rate": config.get_icbc_voucher_rate(), 
+#    "ecard_benchmark": "请通过 vector_search_icbc_mall('京东E卡') 获取实时E卡兑换比率，通常优于立减金",
+#    "note": "立减金可用于京东所有商品(含第三方)；京东E卡仅限京东自营。"
+#  }
 
 @tool
 async def vector_search_icbc_mall(query: str):

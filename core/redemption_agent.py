@@ -15,7 +15,7 @@ import config.resource as resource
 from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
 from core.llm_tools import (
-  get_ecard_voucher_rules, 
+  #get_ecard_voucher_rules, 
   vector_search_icbc_mall, 
   search_jd_promotion, 
   get_points_activities, 
@@ -30,10 +30,27 @@ class AgentState(TypedDict):
 
 class RedemptionAgent:
   def __init__(self):
-    # 1. 获取支持异步的 LLM 实例
+    # 预定义的友好描述映射
+    # 2. 定义工具名称到友好描述的映射
+    self.tool_descriptions = {
+      "vector_search_icbc_mall": "正在工行商城为您搜寻最优惠的商品和E卡...",
+      "search_jd_promotion": "正在对比京东同款商品的价格与优惠政策...",
+      "get_points_activities": "正在为您查询最新的攒豆活动...",
+      "query_icbc_voucher_rules": "正在确认立减金的兑换限制与风控要求..."
+    }
+    
+    #预编译 System Prompt
+    raw_prompt = resource.get_resource()["default_values"]["analyze_intent_system_prompt"]
+    voucher_rate = config.get_icbc_voucher_rate()
+    # 在初始化时就存入内存，后续直接引用
+    self.base_system_message = SystemMessage(
+      content=raw_prompt.replace("{{voucher_rate}}", str(voucher_rate))
+    )
+    
+    #获取支持异步的 LLM 实例
     self.llm = model_factory.get_model()
 
-    # 2. 初始化异步 Redis 客户端
+    #初始化异步 Redis 客户端
     self.redis_client = AsyncRedis(
       host=config.get_redis_host(),
       port=config.get_redis_port(),
@@ -41,22 +58,22 @@ class RedemptionAgent:
       decode_responses=False # 注意：Saver 内部可能需要原始 bytes 进行 Pickle
     )
 
-    # 3. 初始化异步持久化层
+    #初始化异步持久化层
     self.checkpointer = SimpleRedisSaver(
       redis_client=self.redis_client,
       ttl=config.get_redis_msg_ttl_in_seconds()
     )
 
-    # 4. 注册工具
+    #注册工具
     self.tools = [
-      get_ecard_voucher_rules,
+      #get_ecard_voucher_rules,
       vector_search_icbc_mall,
       search_jd_promotion,
       get_points_activities,
       query_icbc_voucher_rules
     ]
 
-    # 5. 绑定工具并构建异步工作流
+    #绑定工具并构建异步工作流
     self.model_with_tools = self.llm.bind_tools(self.tools)
     self.tool_node = ToolNode(self.tools)
     self.app = self._build_workflow().compile(
@@ -79,9 +96,8 @@ class RedemptionAgent:
 
   async def _call_model(self, state: AgentState):
     """异步大脑节点"""
-    _log.debug("--- 正在调用 LLM ---") # 添加这一行
-    system_prompt = resource.get_resource()["default_values"]["analyze_intent_system_prompt"]
-    messages = [SystemMessage(content=system_prompt)] + state["messages"]
+    _log.debug("--- 正在调用 LLM ---") # 添加这一行    
+    messages = [self.base_system_message] + state["messages"]
     
     # 异步调用模型
     response = await self.model_with_tools.ainvoke(messages)
@@ -96,18 +112,51 @@ class RedemptionAgent:
 
   async def get_history(self, user_id: str) -> List[Dict]:
     """
-    异步获取历史记录接口
+    异步获取历史记录：严格过滤掉所有工具交互及中间 JSON 报文
     """
     config_dict = {"configurable": {"thread_id": user_id}}
     state = await self.app.aget_state(config_dict)
     
     history = []
     if state and "messages" in state.values:
-      for msg in state.values["messages"]:
-        role = "user" if isinstance(msg, HumanMessage) else "assistant"
-        # 过滤掉工具调用的中间报文，只给前端看对话
-        if isinstance(msg, (HumanMessage, AIMessage)) and msg.content:
-          history.append({"role": role, "content": msg.content})
+      msgs = state.values["messages"]
+      
+      for msg in msgs:
+        # 兼容处理字典或对象
+        content = getattr(msg, 'content', '') or (msg.get('content', '') if isinstance(msg, dict) else '')
+        msg_type = getattr(msg, 'type', '') or (msg.get('type', '') if isinstance(msg, dict) else '')
+        tool_calls = getattr(msg, 'tool_calls', None) or (msg.get('tool_calls') if isinstance(msg, dict) else None)
+
+        # --- 核心过滤逻辑 ---
+        
+        # 1. 必须有内容
+        if not content or not str(content).strip():
+          continue
+          
+        # 2. 排除工具执行结果 (ToolMessage)
+        if msg_type == "tool":
+          continue
+          
+        # 3. 排除 AI 的工具调用指令 (带 tool_calls 的 AIMessage)
+        if tool_calls:
+          continue
+
+        # 4. 排除 AI 直接复读的原始 JSON 数据 (防止那种 AI: [{"name":...}] 的情况)
+        # 判定标准：内容是以 [ 开头并以 ] 结尾，且尝试解析 JSON 成功
+        stripped_content = str(content).strip()
+        if stripped_content.startswith("[") and stripped_content.endswith("]"):
+          try:
+            json.loads(stripped_content)
+            continue # 如果是纯 JSON 数组，跳过，不给用户看
+          except:
+            pass # 解析失败说明是普通文本，保留
+
+        # 5. 确定角色
+        if msg_type == "human":
+          history.append({"role": "user", "content": content})
+        elif msg_type == "ai":
+          history.append({"role": "assistant", "content": content})
+          
     return history
 
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
@@ -134,14 +183,21 @@ class RedemptionAgent:
               msgs = output.get("messages", [])
               if msgs and isinstance(msgs[-1], ToolMessage):
                 tool_msg = msgs[-1]
+                # 获取友好描述，如果没定义则回退到函数名
+                friendly_desc = self.tool_descriptions.get(
+                  tool_msg.name, 
+                  f"正在执行 {tool_msg.name}..."
+                )
+                
                 trace_msg = {
                   "seq": seq,
                   "type": "chat",
                   "userCode": user_id,
                   "status": "success",
                   "isTrace": True,
-                  "answer": f"正在通过 {tool_msg.name} 查询相关信息...",
-                  "data": {"tool": tool_msg.name, "output": str(tool_msg.content)[:100]}
+                  "answer": friendly_desc,
+                  # don't send the full tool output to frontend, just indicate which tool is being executed
+                  #"data": {"tool": tool_msg.name, "output": str(tool_msg.content)[:100]}
                 }
             elif node_name == "agent":
               # 只有当接下来还要调工具时，才发送“思考中”的 trace
