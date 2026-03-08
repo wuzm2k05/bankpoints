@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-@app.websocket("/ws")
+@app.websocket("/v1/chat")
 async def websocket_endpoint(websocket: WebSocket):
   """
   WebSocket 入口，支持 Pipeline 并发任务
