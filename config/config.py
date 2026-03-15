@@ -91,6 +91,33 @@ def get_redis_msg_ttl_in_seconds():
   return config.getint('redis', 'msg_ttl_in_seconds', fallback=int(os.environ.get('REDIS_MSG_TTL_IN_SECONDS',7200)))
 
 ################################################################################################
+### token
+def get_token_ttl_in_seconds():
+  return config.getint('token', 'ttl_in_seconds', fallback=int(os.environ.get('TOKEN_TTL_IN_SECONDS',7200)))
+
+def get_token_server_port():
+  return config.getint('token','port',fallback=int(os.environ.get('SERVER_PORT', 8444)))
+
+def get_tokenserver_host():
+  return config.get('token','host', fallback=os.environ.get('SERVER_HOST', '0.0.0.0'))
+
+def get_token_ca_cert_file():
+  return config.get('token', 'ca_cert_file', fallback=os.environ.get('TOKEN_CA_CERT_FILE',"data/token_ca_cert.pem"))
+
+def get_token_enabled():
+  return config.getboolean('token', 'enabled', fallback=os.environ.get('TOKEN_ENABLED',"true").lower() in ['true', '1', 'yes'])
+
+def get_token_redis_prefix():
+  return config.get('token', 'redis_prefix', fallback=os.environ.get('TOKEN_REDIS_PREFIX',"jjd_token:"))
+
+def get_token_redis_host():
+  return config.get('token', 'redis_host', fallback=os.environ.get('TOKEN_REDIS_HOST',"127.0.0.1"))
+
+def get_token_redis_port():
+  return config.getint('token', 'redis_port', fallback=int(os.environ.get('TOKEN_REDIS_PORT',6379)))
+
+
+################################################################################################
 ### jd configurations
 def get_jd_app_key():
   return config.get('jd', 'app_key', fallback=os.environ.get('JD_APP_KEY',""))

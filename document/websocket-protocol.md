@@ -13,6 +13,7 @@ request和response都应当是json的编码方式。
 request中必须包含下面内容：
 ```
 {
+    "token": "valid token"
     "seq"："identifier of the msg"
     "type": "type of request"
     
@@ -101,3 +102,47 @@ data：存放更多的工具输出。暂时不用
 
 chat请求的response可能是多个。最后一个的status会标记为end。每个response的answer包含了部分的内容，后端保证按逻辑顺序（分片顺序）发送。前端需按接收顺序拼接 answer 内容。
 如果中间出现错误，返回了status为fail的response，那么后续不会有response了，当然也不会有status为end的response。
+
+## token 管理
+token管理是在一个安全的通道上，即需要双向验证的tls通道上。
+
+### get token
+创建一个新token。这个token在自己的生命周期内都是有效的。调用者通用应当在失效之前重新获取一个token，这样在一段时间内新旧token都是有效的。
+
+Request:
+```
+{
+    "cmd": "getNewToken"
+}
+```
+
+Response:
+```
+{
+    "token": "xxxx",
+    "expireTimeInSeconds": expire_time_in_seconds,
+    "status": "success / fail"
+    "errorCode": "error code of failure" [optional]
+    "errorMsg": "error information to explain the error" [optional]
+}
+```
+
+### 使token失效
+使一个token失效。调用这个命令后这个token马上失效不管它是否到达了过期时间。
+
+Request:
+```
+{
+    "cmd": "cancelToken"
+    "token": "xxxx"
+}
+```
+
+Response:
+```
+{
+    "status": "success / fail"
+    "errorCode": "error code of failure" [optional]
+    "errorMsg": "error information to explain the error" [optional]
+}
+```

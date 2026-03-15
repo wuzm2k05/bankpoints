@@ -1,14 +1,17 @@
 # 2 个空格对齐
 import os
-import asyncio
+import asyncio,json,ssl
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from loguru import logger as _log
+from redis.asyncio import Redis, ConnectionPool
 
+from core.simple_redis_saver import SimpleRedisSaver
 import config.config as config
+import core.token as token_module
 from core.redemption_agent import RedemptionAgent
 
 # 禁用 LangChain 匿名遥测
@@ -17,6 +20,52 @@ os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 state = {}
 
+async def token_management_server():
+  """
+  基于异步 I/O 的 mTLS Token 管理服务
+  """
+  host = config.get_tokenserver_host()
+  port = config.get_token_server_port()
+  
+  # mTLS SSL 上下文配置 (保持不变)
+  ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+  ssl_context.load_cert_chain(config.get_certificate_chain_file(), config.get_private_key_file())
+  ca_path = config.get_token_ca_cert_file()
+  if ca_path and os.path.exists(ca_path):
+    ssl_context.load_verify_locations(ca_file=ca_path)
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
+
+  tm: token_module.TokenManager = state.get("token_manager")
+
+  async def handle_client(reader, writer):
+    try:
+      while True:
+        line = await reader.readline()
+        if not line: break
+        
+        request = json.loads(line.decode('utf-8'))
+        cmd = request.get("cmd")
+        
+        if cmd == "getNewToken":
+          response = await tm.get_new_token() # 调用异步方法
+        elif cmd == "cancelToken":
+          response = await tm.cancel_token(request.get("token"))
+        else:
+          response = {"status": "fail", "errorMsg": "Unknown Cmd"}
+          
+        writer.write((json.dumps(response) + "\n").encode('utf-8'))
+        await writer.drain()
+    except Exception as e:
+      _log.debug("Token Server 连接关闭: {}", e)
+    finally:
+      writer.close()
+      await writer.wait_closed()
+
+  server = await asyncio.start_server(handle_client, host, port, ssl=ssl_context)
+  _log.info("异步 mTLS Token Server 启动于端口 {}", port)
+  async with server:
+    await server.serve_forever()
+    
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   """
@@ -27,6 +76,16 @@ async def lifespan(app: FastAPI):
   if int(max_workers) <= 0:
     cpu_count = multiprocessing.cpu_count()
     max_workers = max(32, min(cpu_count * 5, 200))
+  
+  # 将连接数设为线程池 worker 数的两倍左右比较稳妥
+  redis_pool = ConnectionPool(
+    host=config.get_token_redis_host(),
+    port=config.get_token_redis_port(),
+    db=0,
+    max_connections=config.get_max_thread_workers() * 2 or 100,
+    decode_responses=False # 注意：Saver 可能需要 bytes，TokenManager 自行处理字符串
+  )
+  shared_redis = Redis(connection_pool=redis_pool)
 
   loop = asyncio.get_running_loop()
   executor = ThreadPoolExecutor(
@@ -40,13 +99,22 @@ async def lifespan(app: FastAPI):
   logger_module.setup_logger()
   _log.info("Worker 子进程启动，PID: {} | 线程池大小: {}", os.getpid(), max_workers)
   
+  # 2. 初始化 Token 管理器
+  tm = token_module.TokenManager(ttl=config.get_token_ttl_in_seconds())
+  tm.set_client(shared_redis)
+  state["token_manager"] = tm
+  token_task = asyncio.create_task(token_management_server())
+  
   # 3. 实例化 Agent
-  state["agent"] = RedemptionAgent()
+  saver = SimpleRedisSaver(redis_client=shared_redis,ttl=config.get_redis_msg_ttl_in_seconds())
+  state["agent"] = RedemptionAgent(saver=saver)
   
   yield # --- 运行中 ---
 
   # 4. 资源回收
   _log.info("进程 PID:{} 正在清理资源...", os.getpid())
+  token_task.cancel()
+  
   if "agent" in state:
     try:
       # 给资源清理设置一个硬性超时，防止无限等待
@@ -55,6 +123,13 @@ async def lifespan(app: FastAPI):
     except asyncio.TimeoutError:
       _log.warning("清理资源超时，强制退出")
   state.clear()
+  
+  try:
+    await shared_redis.close() # 关闭客户端实例
+    await redis_pool.disconnect() # 彻底释放连接池中的所有 TCP 连接
+    _log.info("Redis 共享连接池已断开")
+  except Exception as e:
+    _log.error("断开 Redis 连接池失败: {}", e)
 
 app = FastAPI(lifespan=lifespan)
 
@@ -66,11 +141,22 @@ async def websocket_endpoint(websocket: WebSocket):
   await websocket.accept()
   active_tasks = set()
   agent: RedemptionAgent = state.get("agent")
+  user_id = "unknown"
 
   try:
     while True:
       data = await websocket.receive_json()
       _log.debug("收到消息: {}", data)
+      
+      if config.get_token_enabled():
+        token_str = data.get("token")
+        if not token_str or not await state["token_manager"].verify_token(token_str):
+          await websocket.send_json({
+            "status": "fail",
+            "errorCode": "INVALID_TOKEN",
+            "errorMsg": "Token 无效或已过期"
+          })
+          continue
       
       msg_type = data.get("type", "chat")
       user_id = data.get("userCode")
@@ -159,3 +245,6 @@ if __name__ == "__main__":
   _log.info("运行模式: {} | 监听: {}:{}", mode, host, port)
 
   uvicorn.run(**uvicorn_kwargs)
+  
+  
+  

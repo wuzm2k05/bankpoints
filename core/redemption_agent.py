@@ -5,7 +5,6 @@ from typing import Annotated, List, TypedDict, Optional, Dict, Any
 from loguru import logger as _log
 
 # 异步组件导入
-from redis.asyncio import Redis as AsyncRedis
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -29,7 +28,7 @@ class AgentState(TypedDict):
   user_points: Optional[int]
 
 class RedemptionAgent:
-  def __init__(self):
+  def __init__(self,saver: SimpleRedisSaver):
     # 预定义的友好描述映射
     # 2. 定义工具名称到友好描述的映射
     self.tool_descriptions = {
@@ -50,20 +49,9 @@ class RedemptionAgent:
     #获取支持异步的 LLM 实例
     self.llm = model_factory.get_model()
 
-    #初始化异步 Redis 客户端
-    self.redis_client = AsyncRedis(
-      host=config.get_redis_host(),
-      port=config.get_redis_port(),
-      db=0,
-      decode_responses=False # 注意：Saver 内部可能需要原始 bytes 进行 Pickle
-    )
-
     #初始化异步持久化层
-    self.checkpointer = SimpleRedisSaver(
-      redis_client=self.redis_client,
-      ttl=config.get_redis_msg_ttl_in_seconds()
-    )
-
+    self.checkpointer = saver
+    
     #注册工具
     self.tools = [
       #get_ecard_voucher_rules,
@@ -256,5 +244,4 @@ class RedemptionAgent:
 
   async def close_resource(self):
     """清理资源，在 lifespan 的 yield 之后调用"""
-    await self.redis_client.close()
-    _log.info("Agent Redis 连接已关闭")
+    pass
