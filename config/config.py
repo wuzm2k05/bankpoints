@@ -102,7 +102,7 @@ def get_tokenserver_host():
   return config.get('token','host', fallback=os.environ.get('SERVER_HOST', '0.0.0.0'))
 
 def get_token_ca_cert_file():
-  return config.get('token', 'ca_cert_file', fallback=os.environ.get('TOKEN_CA_CERT_FILE',"data/token_ca_cert.pem"))
+  return config.get('token', 'ca_cert_file', fallback=os.environ.get('TOKEN_CA_CERT_FILE',"data/token_ca_cert.crt"))
 
 def get_token_enabled():
   return config.getboolean('token', 'enabled', fallback=os.environ.get('TOKEN_ENABLED',"true").lower() in ['true', '1', 'yes'])
