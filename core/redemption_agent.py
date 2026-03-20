@@ -227,7 +227,19 @@ class RedemptionAgent:
         "userCode": user_id,
         "status": "end",
         "isTrace": False,
-        "answer": "" if has_sent_answer else "未搜索到相关结果。"
+        "answer": "" if has_sent_answer else "未搜索到相关结果。",
+        "products": [
+          {
+            "appid": "wx6e370ef37e04de68",
+            "productId": "10000269008161",
+            "productPromotionLink": "v1=HP0MkpO6bIljStk8xA118vN69R7OC0n632MSQOzq1a3V7IE5BfHlFVIhDDpcjgJ6jQrcow"
+          },
+          {
+            "appid": "wx1a86fc3d682a6563",
+            "productId": "10000265845466",
+            "productPromotionLink": "v1=HLu-HUXAaB7seNcFyw6TlTXzgkdYkTGTEBnDez-CENOWUY017-Q-O2S0l9IFkdyP9pL8Sw"
+          }
+        ]
       })
 
     except Exception as e:
