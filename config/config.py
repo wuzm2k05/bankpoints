@@ -116,6 +116,12 @@ def get_token_redis_host():
 def get_token_redis_port():
   return config.getint('token', 'redis_port', fallback=int(os.environ.get('TOKEN_REDIS_PORT',6379)))
 
+def get_token_certificate_chain_file():
+  return config.get('tls', 'token_certificate_chain_file', fallback=os.environ.get('TOKEN_CERTIFICATE_CHAIN_FILE',"data/token_server.crt"))
+
+def get_token_private_key_file():
+  return config.get('tls', 'token_private_key_file', fallback=os.environ.get('TOKEN_PRIVATE_KEY_FILE',"data/token_server.key"))
+
 
 ################################################################################################
 ### jd configurations

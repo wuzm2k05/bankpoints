@@ -29,17 +29,25 @@ async def token_management_server():
   # 由于 Token Server 在windows上可能会和主服务竞争底层网络资源导致错误，增加启动延迟让主服务先抢占端口，Token Server 再来尝试绑定
   # （虽然这两个server是不同的端口，但是一些网络资源可能导致冲突）
   await asyncio.sleep(1.5)
-  
-  host = config.get_tokenserver_host()
-  port = config.get_token_server_port()
-  
-  # mTLS SSL 上下文配置 (保持不变)
-  ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-  ssl_context.load_cert_chain(config.get_certificate_chain_file(), config.get_private_key_file())
-  ca_path = config.get_token_ca_cert_file()
-  if ca_path and os.path.exists(ca_path):
-    ssl_context.load_verify_locations(ca_file=ca_path)
+
+  try:
+    host = config.get_tokenserver_host()
+    port = config.get_token_server_port()
+   
+    # mTLS SSL 上下文配置 (保持不变)
+    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    #ssl_context.load_cert_chain("data/token_server.crt", "data/token_server.key")
+    ssl_context.load_cert_chain(config.get_token_certificate_chain_file(), config.get_token_private_key_file())
+    ca_path = config.get_token_ca_cert_file()
+    if not (ca_path and os.path.exists(ca_path)):
+      _log.error("未找到 mTLS CA 证书，客户端认证将被跳过，存在安全风险！请确保 {} 文件存在", ca_path)
+      return
+    
+    ssl_context.load_verify_locations(cafile=ca_path)
     ssl_context.verify_mode = ssl.CERT_REQUIRED
+  except Exception as e:
+    _log.error(f"❌ Token Server 启动阶段崩溃: {e}", exc_info=True)
+    return
 
   tm: token_module.TokenManager = state.get("token_manager")
 
@@ -160,6 +168,16 @@ async def lifespan(app: FastAPI):
   try:
     _log.info("正在关闭线程池...")
     executor.shutdown(wait=False,cancel_futures=True) # 不再等待未完成的线程，强制收工
+    
+    current_loop = asyncio.get_running_loop()
+    tasks = [t for t in asyncio.all_tasks(current_loop) if t is not asyncio.current_task()]
+    for t in tasks:
+      t.cancel()
+    
+    # 给一点点时间让 cancel 逻辑跑完
+    if tasks:
+      await asyncio.gather(*tasks, return_exceptions=True)
+        
     loop.set_default_executor(None)
   except Exception: pass
 
