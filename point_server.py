@@ -75,6 +75,9 @@ async def token_management_server():
           response = await tm.get_new_token() # 调用异步方法
         elif cmd == "cancelToken":
           response = await tm.cancel_token(request.get("token"))
+        elif cmd == "wechatDBSync":
+          pdb.trigger_immediate_sync()
+          response = {"status": "success"}
         else:
           response = {"status": "fail", "errorMsg": "Unknown Cmd"}
           quit = True

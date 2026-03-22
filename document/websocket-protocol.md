@@ -170,3 +170,22 @@ Response:
   "errorMsg": "error information to explain the error" [optional]
 }
 ```
+
+### trigger 微信小店商品同步
+让程序立刻从微信小店带货助手处同步商品（正常是按照配置间隔时间同步）
+Request:
+Request:
+```
+{
+  "cmd": "wechatDBSync"
+}
+```
+
+Response:
+```
+{
+  "status": "success / fail"
+  "errorCode": "error code of failure" [optional]
+  "errorMsg": "error information to explain the error" [optional]
+}
+```

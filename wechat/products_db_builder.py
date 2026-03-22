@@ -163,49 +163,73 @@ class WechatTalentDBBuilder():
       except: pass
       return False
 
+
+
+sync_event = asyncio.Event()
+def trigger_immediate_sync():
+  """
+  外部调用此函数，即可立刻触发同步
+  """
+  _log.info("收到即时同步指令，正在唤醒调度器...")
+  sync_event.set()
+
 async def sync_task():
   """
-  周期性定时任务调度器 (内存状态版)
+  周期性定时任务调度器 (支持 Event 唤醒版)
   """
   talent_conf = resource.get_resource()["wechat"]["talent"]
   period_days = talent_conf["sync_period_in_days"]
-  check_interval_min = talent_conf["sync_check_interval_in_minutes"]
+  check_interval_sec = talent_conf["sync_check_interval_in_minutes"] * 60
   start_hour = talent_conf["sync_start_time"]
   end_hour = talent_conf["sync_end_time"]
 
   last_sync_date = None
-  last_sync_timestamp = 0
+  last_sync_timestamp = time.time()
   builder = WechatTalentDBBuilder()
 
   _log.info("同步调度器启动: 每 {} 天一次, 窗口 {}:00-{}:00", 
-           period_days, start_hour, end_hour)
+             period_days, start_hour, end_hour)
 
   while True:
     try:
+      # 检查是否是被手动触发的
+      is_manual = sync_event.is_set()
+      if is_manual:
+        sync_event.clear()
+        _log.info(">>> 调度器被手动唤醒，准备执行同步...")
+
       now = datetime.now()
       today = now.date()
       current_hour = now.hour
 
-      if start_hour <= current_hour < end_hour:
-        days_passed = (time.time() - last_sync_timestamp) / (24 * 3600)
-        already_done_today = (last_sync_date == today)
+      # 判断逻辑：手动触发忽略时间窗口和周期限制，定时触发则需满足约束
+      in_window = (start_hour <= current_hour < end_hour)
+      days_passed = (time.time() - last_sync_timestamp) / (24 * 3600)
+      already_done_today = (last_sync_date == today)
 
-        if (days_passed >= period_days) and not already_done_today:
-          _log.info("触发同步：进入时间窗口且满足周期限制")
-          
-          # 执行同步逻辑
-          success = await builder.sync_once()
-          
-          if success:
-            last_sync_date = today
-            last_sync_timestamp = time.time()
-            _log.success("本轮同步成功完成")
+      should_run = is_manual or (in_window and days_passed >= period_days and not already_done_today)
+
+      if should_run:
+        _log.info("开始执行同步任务 (触发原因: {})", "手动" if is_manual else "定时")
+        success = await builder.sync_once()
+        
+        if success:
+          last_sync_date = today
+          last_sync_timestamp = time.time()
+          _log.success("本轮同步成功完成")
+      else:
+        if not in_window:
+          _log.debug("不在同步时间段 (当前 {}:00)，跳过", current_hour)
         else:
           _log.debug("不满足同步周期或今日已执行，跳过")
-      else:
-        _log.debug("不在同步时间段 (当前 {}:00)，跳过", current_hour)
 
     except Exception as e:
       _log.error("Sync Task 调度异常: {}", e)
 
-    await asyncio.sleep(check_interval_min * 60)
+    # 关键点：使用 wait 等待 interval 秒或者直到 event 被 set
+    try:
+      # 如果手动触发刚运行完，再次进入等待
+      await asyncio.wait_for(sync_event.wait(), timeout=check_interval_sec)
+    except asyncio.TimeoutError:
+      # 正常超时，继续下一轮 while 循环检查时间
+      pass
