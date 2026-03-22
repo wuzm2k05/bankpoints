@@ -171,12 +171,12 @@ class RedemptionAgent:
           # 特殊情况：如果内容被清洗后为空（例如 AI 只发了 JSON），则跳过或保留原样
           if not clean_content and not products:
             continue
-
-          history.append({
-            "role": "assistant", 
-            "content": clean_content,
-            "products": products
-          })
+          
+          msg = {"role": "assistant","content": clean_content}
+          if products:
+            msg["products"] = products
+            
+          history.append(msg)
           
     return history
   
@@ -285,16 +285,18 @@ class RedemptionAgent:
         _log.error(f"compose products after llm error : {str(e)}")
         # error then we don't use products
         return_products = []
-        
-      await websocket.send_json({
+      
+      msg = {
         "seq": seq,
         "type": "chat",
         "userCode": user_id,
         "status": "end",
         "isTrace": False,
-        "answer": "" if has_sent_final_answer else "抱歉，暂时没有为您找到合适的方案。",
-        "products": return_products
-      })
+        "answer": "" if has_sent_final_answer else "抱歉，暂时没有为您找到合适的方案。"
+      }
+      if return_products:
+        msg["products"] = return_products  
+      await websocket.send_json(msg)
 
     except Exception as e:
       _log.error("流式对话链路异常: {}", e)
