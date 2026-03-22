@@ -40,17 +40,33 @@ def setup_logger():
   if "console" in destination:
     logger.add(sys.stdout, level=log_level, format=log_format)
 
+  # 定义两个过滤器
+  def is_missing_product(record):
+    return "missing_product" in record["extra"]
+
+  def is_normal_log(record):
+    return "missing_product" not in record["extra"]
+
+  # 1. 配置正常业务日志 (app.log)
   if "file" in destination:
     logger.add(
       log_file,
       level=log_level,
       format=log_format,
-      rotation=f"{max_size} B", # 自动滚动
-      retention=backup_num,      # 保留文件数
-      enqueue=True,              # 核心：开启多进程安全的异步队列
-      encoding="utf-8",
-      compression="zip"          # 可选：旧日志自动压缩节省空间
+      filter=is_normal_log,  # <--- 关键：排除掉缺失商品的记录
+      rotation=f"{max_size} B",
+      enqueue=True
     )
+
+  # 2. 配置缺失商品清单
+  logger.add(
+    "data/wechat_missing_products.jsonl",
+    level="INFO",
+    format="{message}",      # 只要纯 JSON 内容
+    filter=is_missing_product, # <--- 关键：只记录缺失商品的记录
+    enqueue=True,
+    delay=True
+  )
 
 def get_logger():
   """

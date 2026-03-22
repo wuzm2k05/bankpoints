@@ -1,6 +1,6 @@
 # 2 个空格对齐
 import asyncio,time
-import re
+import re,datetime,json
 from typing import List, Optional, Dict, Any
 import sys
 from multiprocessing import Value
@@ -113,17 +113,20 @@ class ICBCVectorDB(metaclass=SingletonMeta):
     try:
       self.wechat_collection.modify(name="wechat_talent_products_old")
     except: pass
+    try:  
+      temp_coll.modify(name="wechat_talent_products")
+      self.wechat_collection = self.client.get_collection(name="wechat_talent_products")
       
-    temp_coll.modify(name="wechat_talent_products")
-    self.wechat_collection = self.client.get_collection(name="wechat_talent_products")
-    
-    with self.shared_version.get_lock():
-      self.shared_version.value += 1
-    
-    self.local_version = self.shared_version.value
-    
-    _log.success("微信库流式重建完成并已上线")
-
+      with self.shared_version.get_lock():
+        self.shared_version.value += 1
+      
+      self.local_version = self.shared_version.value
+      
+      _log.success("微信库流式重建完成并已上线")
+    except Exception as e:
+      _log.error(f"重建wechat products 失败: {str(e)}")
+      raise e
+      
   def get_product_by_id(self, product_id: str) -> Optional[Dict[str, Any]]:
     """
     根据 ID 从正式库查询商品信息，用于判断是否需要重新调用 LLM
@@ -193,6 +196,27 @@ class ICBCVectorDB(metaclass=SingletonMeta):
           "distance": results["distances"][0][i],
           "desc": ai_desc
         })
+    
+    # 判断是否我们没有这款商品，如果没有就记录下来    
+    DISTANCE_THRESHOLD = 0.55
+    
+    # 判定：完全没结果 OR 第一名的距离太大
+    is_not_found = not output
+    is_low_relevance = output and output[0]["distance"] > DISTANCE_THRESHOLD
+
+    if is_not_found or is_low_relevance:
+      # 使用 bind 绑定 extra 字段，触发特殊的 logger sink
+      log_data = {
+        "query": query,
+        "reason": "not_found" if is_not_found else "low_relevance",
+        "best_distance": output[0]["distance"] if output else 1.0,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "best_match": output[0]["title"] if output else None
+      }
+      
+      _log.bind(missing_product=True).info(json.dumps(log_data, ensure_ascii=False))
+      _log.debug("已记录缺失商品 Query: {}", query)
+    
     return output
   
 

@@ -28,6 +28,46 @@ from core.icbc_db import ICBCVectorDB
 #  }
 
 @tool
+async def vector_search_wechat_products(query: str):
+  """
+  【核心指令】调用此工具检索微信小店商城中的商品候选列表，此数据库为向量数据库。
+  
+  重要操作规范：
+  1. 语义筛选：返回结果基于向量相似度，可能包含噪音。你必须作为审计员，剔除任何不符合用户意图的商品。
+
+  Args:
+    query (str): 用户的原始需求、意图关键词或具体的商品名称。
+    
+  Returns:
+    list[dict]: 商品字典列表。每个字典包含: id,name, price, distance,outId,outAppId,link
+      id: 商品的id
+      name：商品的名字
+      price：商品的价格，单位是分。
+      outId: 用来返回给用户的信息。
+      outAppId: 用来返回给用户的信息。
+      link: 用来返回给用户的信息。
+  """
+  _log.info("vector_search_icbc_mall tool: 搜索微信小店商品，查询语句：{}", query)
+  
+  # 假设 ICBCVectorDB 已经支持异步搜索，或者在内部处理了线程池
+  icbc_db = ICBCVectorDB()
+  results = await icbc_db.asearch_wechat_products(query, limit=3) 
+  ret = []
+  for item in results:
+    ret.append({
+      "id": item["id"],
+      "price": item["price"],
+      "name": item["title"],
+      "distance": item["distance"],
+      "outId": item["outId"],
+      "outAppId": item["outAppId"],
+      "link": item["link"]
+    })
+  
+  return ret
+
+
+@tool
 async def vector_search_icbc_mall(query: str):
   """
   【核心指令】调用此工具检索工银i豆商城中的商品候选列表，此数据库为向量数据库。
