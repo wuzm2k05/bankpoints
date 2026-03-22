@@ -56,12 +56,12 @@ Response: 除通用内容外，包含下面内容
 ```
 {
   "userCode": "identifier of user"
-  "history": [ {"role":"assistant or user", "content": "content of message"},]
+  "history": [ {"role":"assistant or user", "content": "content of message", "products": []},]
 }
 ```
 
 userCode使用的是Request中的值。
-history 是一个数组包括多条消息。每条消息包括role和content两项内容。role可以是assistant或者user，content是具体的内容信息，以markdown格式回答。  
+history 是一个数组包括多条消息。每条消息包括role和content两项内容。role可以是assistant或者user，content是具体的内容信息，以markdown格式回答。products为可选项，详情见chat介绍。  
 assistant role表示是AI说的内容。user role表示是用户说的内容。
 
 说明：用户历史存储时长可配置（后端统一配置），默认为一天。

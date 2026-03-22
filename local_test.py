@@ -13,10 +13,12 @@ input_lock = asyncio.Event()
 current_token: Optional[str] = None
 
 
-#host = "www.node09.cn"
-host = "node09.cn"
+host = "www.node09.cn"
+#host = "node09.cn"
 token_server_port = 8444
-msg_server_port = 8443
+#msg_server_port = 8443
+
+msg_server_port = 9443
 
 # --- 1. mTLS Token 管理逻辑 ---
 async def manage_token(cmd: str, token_to_cancel: str = None) -> Optional[str]:
