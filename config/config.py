@@ -137,7 +137,6 @@ def get_jd_site_id():
 def get_jd_position_id():
   return config.get('jd', 'position_id', fallback=os.environ.get('JD_POSITION_ID',""))
 
-
 ################################################################################################
 ### icbc mall configurations
 def get_icbc_voucher_rate():

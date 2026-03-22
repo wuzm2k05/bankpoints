@@ -142,3 +142,31 @@ models:
     base_url: "https://generativelanguage.googleapis.com/v1"
     api_key: "GEMINI_API_KEY"
     temperature: 0
+
+wechat:
+  talent:
+    sync_period_in_days: 7
+    sync_check_interval_in_minutes: 30
+    sync_start_time: 2
+    sync_end_time: 4
+    vector_db_model: "deepseek"
+    vector_db_batch_sync_size: 20
+    vector_db_batch_llm_size: 5
+    vector_db_prompt: |
+      你是一个电商营销专家。请根据提供的商品列表，为每个商品生成一段 100 字以内的语义增强描述。
+    
+      ### 任务要求：
+      1. 挖掘潜在使用场景（如：送礼、家用、聚会）及受众群体。
+      2. 将规格参数转化为易于理解的卖点，包含用户可能搜索的非直观关键词。
+      3. 语言风格：亲和、专业、有吸引力。
+
+      ### 强制约束（违者解析失败）：
+      1. 必须返回一个 JSON 字符串数组，格式为: ["描述1", "描述2", ...]
+      2. 数组长度必须严格等于 {item_count}。
+      3. 严禁包含示例中的“空气炸锅”、“茶叶”等无关内容。
+      4. 严禁在描述中提及 "Item 1" 或 "商品1" 等编号，直接写描述内容。
+      5. 只输出 JSON 数组本身，不要任何 Markdown 标签或解释。
+
+      ### 待处理商品列表（格式为 "Item 1: 标题"）：
+      {items_text}
+      

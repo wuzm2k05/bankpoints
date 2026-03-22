@@ -14,12 +14,22 @@ from core.simple_redis_saver import SimpleRedisSaver
 import config.config as config
 import core.token as token_module
 from core.redemption_agent import RedemptionAgent
+import wechat.products_db_builder as pdb
+
+# make sure icbc vector db is safe in multiple processes
+from core.icbc_db import ICBCVectorDB
 
 # 禁用 LangChain 匿名遥测
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 state = {}
+
+async def start_single_services():
+  """
+  启动一些只需要一个进程中运行的的服务，如sync 带货助手的货物等
+  """
+  state["wechat_talent_sync_task_handle"] = asyncio.create_task(pdb.sync_task())
 
 async def token_management_server():
   """
@@ -84,9 +94,11 @@ async def token_management_server():
   try:
     # 尝试启动监听
     server = await asyncio.start_server(handle_client, host, port, ssl=ssl_context)
+    state["is_master_node"] = True
   except OSError as e:
     # 10048 是 Windows 端口占用，98 是 Linux 端口占用
     if e.errno in (10048, 98):
+      state["is_master_node"] = False
       _log.info("PID: {} | Token Server 端口 {} 已被其他 Worker 占用，本进程仅处理业务逻辑", os.getpid(), port)
       return # 抢不到端口直接退出函数，该 Task 结束
     raise e # 其他类型的网络错误仍然抛出
@@ -96,8 +108,16 @@ async def token_management_server():
   async with server:
     await server.serve_forever()
     
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+
+async def init_singleton_classes():
+  """
+  this function to init singleton class in multiple processes. 
+  to avoid some multiple processes issues.
+  """
+  ICBCVectorDB()
+
+
+async def lifespan_init():
   """
   初始化子进程资源
   """
@@ -116,6 +136,8 @@ async def lifespan(app: FastAPI):
     decode_responses=False # 注意：Saver 可能需要 bytes，TokenManager 自行处理字符串
   )
   shared_redis = Redis(connection_pool=redis_pool)
+  state["shared_redis"] = shared_redis
+  state["redis_pool"] = redis_pool
 
   loop = asyncio.get_running_loop()
   executor = ThreadPoolExecutor(
@@ -123,6 +145,8 @@ async def lifespan(app: FastAPI):
     thread_name_prefix=f"Worker_{os.getpid()}_Pool"
   )
   loop.set_default_executor(executor)
+  state["loop"] = loop
+  state["executor"] = executor
   
   # 2. 日志初始化
   import log.logger as logger_module
@@ -133,17 +157,50 @@ async def lifespan(app: FastAPI):
   tm = token_module.TokenManager(ttl=config.get_token_ttl_in_seconds())
   tm.set_client(shared_redis)
   state["token_manager"] = tm
-  token_task = asyncio.create_task(token_management_server())
+  state["token_task"] = asyncio.create_task(token_management_server())
   
   # 3. 实例化 Agent
   saver = SimpleRedisSaver(redis_client=shared_redis,ttl=config.get_redis_msg_ttl_in_seconds())
   state["agent"] = RedemptionAgent(saver=saver)
   
+  # init singleton classes
+  await init_singleton_classes()
+  
+  #启动单例服务
+  while True:
+    if "is_master_node" in state:
+      if state["is_master_node"]:
+        _log.info(f"当前进程为 Master Node，单例服务在本进程pid {os.getpid()} 中启动。")
+        await start_single_services() # 启动单实例服务
+      else:
+        _log.info("当前节点为 Worker Node，不启动任何单例服务。")
+        
+      break
+    else:
+      await asyncio.sleep(1) 
+  
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+  await lifespan_init()
+  
   yield # --- 运行中 ---
+  
+  await lifespan_done()
 
+async def lifespan_done():
   # 4. 资源回收
   _log.info("进程 PID:{} 正在清理资源...", os.getpid())
+  if "wechat_talent_sync_task_handle" in state:
+    task = state["wechat_talent_sync_task_handle"]
+    _log.info("正在停止同步定时任务...")
+    task.cancel()
+    try:
+      await asyncio.wait_for(task, timeout=5.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+      pass
+    
   # A. 先取消 Token Server 任务并等待它结束
+  token_task = state["token_task"]
   if not token_task.done():
     token_task.cancel()
     try: await asyncio.wait_for(token_task, timeout=2.0)
@@ -158,6 +215,8 @@ async def lifespan(app: FastAPI):
 
   # C. 显式关闭 Redis (顺序：先 Client 后 Pool)
   try:
+    shared_redis = state["shared_redis"]
+    redis_pool = state["redis_pool"]
     await shared_redis.aclose() # 注意异步库建议用 aclose()
     await redis_pool.disconnect()
     _log.info("Redis 共享连接池已断开")
@@ -166,6 +225,8 @@ async def lifespan(app: FastAPI):
   # D. 核心补丁：显式关闭自定义线程池
   # 如果不关闭这个，进程往往会挂在“Waiting for child process”
   try:
+    executor = state["executor"]
+    loop = state["loop"]
     _log.info("正在关闭线程池...")
     executor.shutdown(wait=False,cancel_futures=True) # 不再等待未完成的线程，强制收工
     
@@ -294,6 +355,9 @@ if __name__ == "__main__":
     mode = "WSS (Secure)"
   else:
     mode = "WS (Plain)"
+  
+  # 这确保了 ICBCVectorDB._shared_version 在父进程分配内存
+  ICBCVectorDB()
 
   _log.info("--- 工银 i 豆精算管家启动 ---")
   _log.info("运行模式: {} | 监听: {}:{}", mode, host, port)

@@ -6,27 +6,27 @@ import config.config as config
 from loguru import logger as _log
 
 # 使用全局变量实现简单的进程内单例
-_model_instance = None
+_model_instances = {}
 
-def get_model():
+def get_model(model_name = None):
   """
   获取大模型实例。
   采用进程内单例模式，确保每个子进程只维护一个连接池。
   """
-  global _model_instance
+  if model_name is None:
+    model_name = resource.get("active_model", "hunyuan")
   
-  if _model_instance is not None:
-    return _model_instance
-
+  if model_name in _model_instances:
+    return _model_instances[model_name]
+    
   resource = get_resource()
   # 优先从配置获取，默认混元
-  mode_name = resource.get("active_model", "hunyuan")
   
-  if mode_name not in resource["models"]:
-    _log.error("配置中未找到模型 {} 的定义", mode_name)
-    raise ValueError(f"Model {mode_name} not configured")
+  if model_name not in resource["models"]:
+    _log.error("配置中未找到模型 {} 的定义", model_name)
+    raise ValueError(f"Model {model_name} not configured")
 
-  model_param = resource["models"][mode_name]
+  model_param = resource["models"][model_name]
   
   # 获取 API Key
   raw_key = model_param["api_key"]
@@ -36,7 +36,7 @@ def get_model():
             model_param["model_name"], 
             model_param["base_url"])
 
-  _model_instance = ChatOpenAI(
+  model_instance = ChatOpenAI(
     model=model_param["model_name"],
     api_key=real_api_key,
     base_url=model_param["base_url"],
@@ -47,4 +47,6 @@ def get_model():
     streaming=True 
   )
   
-  return _model_instance
+  _model_instances[model_name] = model_instance
+  
+  return model_instance
