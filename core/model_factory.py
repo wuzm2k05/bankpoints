@@ -13,15 +13,14 @@ def get_model(model_name = None):
   获取大模型实例。
   采用进程内单例模式，确保每个子进程只维护一个连接池。
   """
+  resource = get_resource()
+  
   if model_name is None:
     model_name = resource.get("active_model", "hunyuan")
   
   if model_name in _model_instances:
     return _model_instances[model_name]
     
-  resource = get_resource()
-  # 优先从配置获取，默认混元
-  
   if model_name not in resource["models"]:
     _log.error("配置中未找到模型 {} 的定义", model_name)
     raise ValueError(f"Model {model_name} not configured")

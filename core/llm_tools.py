@@ -154,6 +154,7 @@ async def query_icbc_voucher_rules(query: str) -> str:
   """
   【业务工具：工行立减金/微信立减金规则查询】
   当用户咨询关于“工行微信立减金”（Voucher）的任何业务逻辑时调用。
+  注意：立减金的兑换比例不属于本规则范围。
   """
   try:
     _log.info("query_icbc_voucher_rules tool: 查询规则，query={}", query)
