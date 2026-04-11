@@ -260,6 +260,7 @@ class RedemptionAgent:
 
               has_sent_final_answer = True
               
+              _log.debug(f"send answer back: {display_answer}")
               await websocket.send_json({
                 "seq": seq,
                 "type": "chat",
@@ -295,6 +296,8 @@ class RedemptionAgent:
       }
       if return_products:
         msg["products"] = return_products  
+      
+      _log.debug(f"send msg back: {msg}")
       await websocket.send_json(msg)
 
     except Exception as e:
