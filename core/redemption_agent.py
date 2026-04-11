@@ -89,8 +89,7 @@ class RedemptionAgent:
     return workflow
 
   async def _call_model(self, state: AgentState):
-    """异步大脑节点"""
-    _log.debug("--- 正在调用 LLM ---") # 添加这一行    
+    _log.debug("--- 正在调用 LLM ---")
     messages = [self.base_system_message] + state["messages"]
     
     # 异步调用模型
@@ -100,7 +99,7 @@ class RedemptionAgent:
   def _router(self, state: AgentState):
     """路由逻辑"""
     last_msg = state["messages"][-1]
-    if last_msg.tool_calls:
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
       return "tools"
     return END
   
@@ -300,6 +299,20 @@ class RedemptionAgent:
 
     except Exception as e:
       _log.error("流式对话链路异常: {}", e)
+      
+      error_str = str(e)
+      if "400" in error_str and "tool_calls" in error_str:
+        _log.warning(f"检测到致命协议错误，正在重置用户 {user_id} 的历史记录...")
+        try:
+          # 调用刚才在 SimpleRedisSaver 中新增的 adelete 方法
+          await self.checkpointer.adelete(user_id)
+          user_hint = "系统状态已重置，请尝试重新发送您的请求。"
+        except Exception as redis_e:
+          _log.error(f"重置历史记录失败: {redis_e}")
+          user_hint = f"系统繁忙({error_str[:20]})，请稍后再试。"
+      else:
+        user_hint = f"请求处理异常，请稍后再试。"
+      
       await websocket.send_json({
         "seq": seq,
         "type": "chat",
@@ -307,7 +320,7 @@ class RedemptionAgent:
         "status": "fail",
         "isTrace": False,
         "errorCode": "500",
-        "errorMsg": f"系统繁忙，请稍后再试: {str(e)}"
+        "errorMsg": user_hint
       })
 
   async def close_resource(self):

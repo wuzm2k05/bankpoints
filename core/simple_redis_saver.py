@@ -161,3 +161,17 @@ class SimpleRedisSaver(BaseCheckpointSaver):
         count += 1
       except:
         continue
+  
+  async def adelete(self, thread_id: str) -> bool:
+    """清除指定 thread_id 的所有快照数据"""
+    checkpoint_key = f"checkpoints:{thread_id}"
+    # 这里的模糊匹配是为了清理相关的写入数据（如果有必要）
+    # 如果只清理快照，直接 delete checkpoint_key 即可
+    try:
+      _log.info(f"正在从 Redis 删除会话: {checkpoint_key}")
+      # 删除主快照 Hash
+      result = await self.redis_client.delete(checkpoint_key)
+      return result > 0
+    except Exception as e:
+      _log.error(f"删除 Redis 记录失败: {e}")
+      return False
