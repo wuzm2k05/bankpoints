@@ -35,7 +35,7 @@ class RedemptionAgent:
     self.tool_descriptions = {
       "vector_search_icbc_mall": "正在工行商城为您搜寻最优惠的商品...",
       #"search_jd_promotion": "正在对比京东同款商品的价格与优惠政策...",
-      "vector_search_wechat_products": "正在对比微信小店商品的价格...",
+      "vector_search_wechat_products": "正在全网对比商品的价格...",
       "get_points_activities": "正在为您查询最新的攒豆活动...",
       "query_icbc_voucher_rules": "正在确认立减金的兑换限制与风控要求..."
     }
