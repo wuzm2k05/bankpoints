@@ -1,6 +1,7 @@
 # 2 个空格对齐
 import asyncio,time
 import re,json
+import hashlib
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 import sys
@@ -226,7 +227,7 @@ class ICBCVectorDB(metaclass=SingletonMeta):
     """异步搜索商品"""
     return await asyncio.to_thread(self.search, query, limit)
 
-  async def asearch_voucher_info(self, query: str, limit: int = 2) -> List[str]:
+  async def asearch_voucher_info(self, query: str, limit: int = 3) -> List[Dict[str, Any]]:
     """异步搜索立减金规则"""
     return await asyncio.to_thread(self.search_voucher_info, query, limit)
 
@@ -256,16 +257,27 @@ class ICBCVectorDB(metaclass=SingletonMeta):
         })
     return output
 
-  def search_voucher_info(self, query: str, limit: int = 2) -> List[str]:
+  def search_voucher_info(self, query: str, limit: int = 3) -> List[str]:
     _log.debug("正在搜索立减金规则: {}", query)
     query_vector = self.embeddings.embed_query(query)
     results = self.voucher_collection.query(
       query_embeddings=[query_vector],
       n_results=limit
     )
-    if results["documents"] and len(results["documents"][0]) > 0:
-      return results["documents"][0]
-    return []
+    output = []
+    
+    if results and results.get("documents") and len(results["documents"][0]) > 0:
+      for i in range(len(results["documents"][0])):
+        # 获取元数据中的原始回答
+        metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
+        
+        output.append({
+          "content": metadata.get("answer") or results["documents"][0][i], # 优先给 LLM 读完整答案
+          "distance": results["distances"][0][i],
+          "question": metadata.get("question", "")
+        })
+        
+    return output
 
   def search_strategy(self, query: str, limit: int = 2) -> List[Dict[str, Any]]:
     _log.debug("正在搜索积分策略: {}", query)
@@ -303,21 +315,59 @@ class ICBCVectorDB(metaclass=SingletonMeta):
     )
     _log.info("成功导入 {} 条商品数据", len(ids))
 
-  def add_voucher_knowledge(self, qa_content: str):
-    parts = re.split(r'Q[:：]', qa_content)
+  def add_voucher_knowledge(self, qa_list: List[Dict[str, str]]):
+    """
+    增加立减金知识库（基于内容哈希 ID）
+    """
     documents = []
     ids = []
     metadatas = []
     
-    for idx, part in enumerate(parts):
-      if not part.strip(): continue
-      ids.append(f"voucher_qa_{idx}")
-      documents.append("Q: " + part.strip())
-      metadatas.append({"source": "official_faq", "type": "standing_voucher"})
+    for qa in qa_list:
+      q_text = qa["question"]
+      a_text = qa["answer"]
+      bundle = qa.get("search_bundle", "")
+      
+      # 2. 生成基于内容的 MD5 哈希 ID
+      # 将 Q 和 A 组合，确保内容的微小变动都能生成不同的 ID
+      content_str = f"{q_text}|||{a_text}"
+      content_hash = hashlib.md5(content_str.encode(encoding='UTF-8')).hexdigest()
+      
+      ids.append(f"v_{content_hash}")
+      
+      # 3. 构造检索专用文档（强化权重）
+      search_doc = f"{q_text} {q_text} {bundle}"
+      documents.append(search_doc)
+      
+      # 4. 存储元数据
+      metadatas.append({
+        "question": q_text,
+        "answer": a_text,
+        "source": "official_faq"
+      })
 
     if documents:
+      # 批量向量化并写入
       embeddings = self.embeddings.embed_documents(documents)
       self.voucher_collection.add(
-        ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas
+        ids=ids, 
+        embeddings=embeddings, 
+        documents=documents, 
+        metadatas=metadatas
       )
-      _log.info("成功导入 {} 条业务知识", len(documents))
+      _log.success(f"导入完成，共计 {len(documents)} 条知识条目")
+      
+  def build_voucher_knowledge(self, qa_list: List[Dict[str, str]]):
+    """
+    全量导入立减金知识库（基于内容哈希 ID）
+    """
+    # 1. 依然建议在全量导入前清空集合，确保数据库中不留旧规则
+    try:
+      self.client.delete_collection(name="icbc_standing_vouchers")
+      self.voucher_collection = self.client.create_collection(name="icbc_standing_vouchers")
+      _log.info("已清空立减金知识库，准备执行全量导入...")
+    except Exception as e:
+      self.voucher_collection = self.client.get_or_create_collection(name="icbc_standing_vouchers")
+
+    self.add_voucher_knowledge(qa_list)
+    _log.success(f"全量导入完成")

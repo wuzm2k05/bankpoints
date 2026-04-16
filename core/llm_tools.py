@@ -153,21 +153,52 @@ async def get_points_activities(gap_points: int = 0):
 async def query_icbc_voucher_rules(query: str) -> str:
   """
   【业务工具：工行立减金/微信立减金规则查询】
-  当用户咨询关于“工行微信立减金”（Voucher）的任何业务逻辑时调用。
-  注意：立减金的兑换比例不属于本规则范围。
+  
+  用途：
+  当用户咨询工行微信立减金的业务逻辑、兑换流程、兑换比例、报错码（如12003832）、有效期、补发规则时调用。也包括了i豆兑换实物的兑换途径。
+  支持模糊语义搜索和错误码精确匹配。
+
+  返回内容说明：
+  返回格式为多条业务规则列表。每条规则包含：
+  - 【可信度】：基于向量距离计算的相关性评价（高度相关/相关/参考信息）。
+  - 【标准问题】：知识库中记录的原始问题。
+  - 【规则内容】：该问题的标准官方解答。
   """
   try:
-    _log.info("query_icbc_voucher_rules tool: 查询规则，query={}", query)
+    _log.info("query_icbc_voucher_rules tool: 执行精算级检索, query={}", query)
     db = ICBCVectorDB()
-    # 异步检索规则
-    results = await db.asearch_voucher_info(query, limit=2)
     
-    if not results:
-      return "数据库中暂无特定规则。请引导用户核实e支付开通情况或联系客服。"
+    # 1. 调用增强后的异步检索（建议 limit 增加到 3，给模型更多上下文）
+    # 注意：此时 asearch_voucher_info 返回的是 List[Dict]
+    items = await db.asearch_voucher_info(query, limit=3)
+    
+    if not items:
+      return "【结果】: 知识库中未匹配到相关规则。请告知用户：'暂未查到该问题的具体规定，建议核实e支付状态或咨询人工客服'。"
       
-    context = "\n---\n".join(results)
-    return f"找到以下相关业务规则：\n{context}"
+    # 2. 格式化检索结果，带上语义距离（Distance）
+    # 告诉大模型哪些是“强相关”，哪些是“参考”
+    formatted_results = []
+    for item in items:
+      dist = item.get("distance", 1.0)
+      # 语义距离在 Chroma 中通常 0.2 以内极准，0.5 以上开始偏移
+      reliability = "高度相关" if dist < 0.4 else "相关" if dist < 0.6 else "参考信息"
+      
+      content = (
+        f"【可信度】: {reliability} (距离:{dist:.4f})\n"
+        f"【标准问题】: {item.get('question', '未知')}\n"
+        f"【规则内容】: {item.get('content', '')}"
+      )
+      formatted_results.append(content)
+      
+    context = "\n\n---\n\n".join(formatted_results)
+    
+    # 3. 在返回给大模型的内容中加入引导指令
+    return (
+      f"为您找到以下立减金业务规则：\n\n{context}\n\n"
+      f"【指令】: 请优先根据'高度相关'的内容回答。如果所有内容距离均大于 0.6，"
+      f"请委婉告知用户可能无法准确回答，并提供通用性建议。"
+    )
     
   except Exception as e:
-    _log.error("查询立减金规则时出错: {}", str(e))
-    return f"工具调用异常: {str(e)}"
+    _log.error("查询立减金规则工具执行失败: {}", str(e))
+    return f"【工具报错】: 内部执行异常，请尝试根据常识回答或引导人工。"
