@@ -39,7 +39,7 @@ def get_model(model_name = None):
     model=model_param["model_name"],
     api_key=real_api_key,
     base_url=model_param["base_url"],
-    temperature=model_param.get("temperature", 0),
+    #temperature=model_param.get("temperature", 0),
     # 增加超时配置，防止异步链路死锁
     timeout=60,
     # 开启流式支持

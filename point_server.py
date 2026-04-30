@@ -4,6 +4,9 @@ import asyncio,json,ssl
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 import uvicorn
+from dotenv import load_dotenv
+load_dotenv()
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from loguru import logger as _log
