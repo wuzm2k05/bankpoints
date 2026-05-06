@@ -151,7 +151,7 @@ async def query_icbc_voucher_rules(query: str) -> str:
     
     # 1. 调用增强后的异步检索（建议 limit 增加到 3，给模型更多上下文）
     # 注意：此时 asearch_voucher_info 返回的是 List[Dict]
-    items = await db.asearch_voucher_info(query, limit=3)
+    items = await db.asearch_voucher_info(query, limit=config.get_db_voucher_rules_number())
     
     if not items:
       return "【结果】: 知识库中未匹配到相关规则。请告知用户：'暂未查到该问题的具体规定，建议核实e支付状态或咨询人工客服'。"
@@ -172,6 +172,8 @@ async def query_icbc_voucher_rules(query: str) -> str:
       formatted_results.append(content)
       
     context = "\n\n---\n\n".join(formatted_results)
+    
+    #_log.info(f"query_icbc_voucher_rules tool: 检索到 {len(items)} 条结果，返回给模型的内容:\n{context}")
     
     # 3. 在返回给大模型的内容中加入引导指令
     return (

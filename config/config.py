@@ -142,6 +142,10 @@ def get_jd_position_id():
 def get_icbc_voucher_rate():
   return config.getint('icbc_mall', 'voucher_rate', fallback=int(os.environ.get('ICBC_MALL_VOUCHER_RATE',1100)))
 
+###############################################################################################
+def get_db_voucher_rules_number():
+  return config.getint('icbc_db', 'voucher_rules_number', fallback=int(os.environ.get('ICBC_DB_VOUCHER_RULES_NUMBER',5)))
+
 ################################################################################################
 ### for files location
 def get_resource_file():
