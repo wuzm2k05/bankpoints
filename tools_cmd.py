@@ -1,5 +1,7 @@
 import asyncio,sys
 from tools.icbc_voucher_to_db import VoucherKnowledgeBuilder
+from dotenv import load_dotenv
+load_dotenv()
 
 from loguru import logger as _log
 
