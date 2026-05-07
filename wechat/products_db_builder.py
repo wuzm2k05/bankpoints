@@ -81,6 +81,7 @@ class WechatTalentDBBuilder():
         last_buffer = response.get("last_buffer")
 
         for item in products:
+          _log.debug("处理商品 ID: {}, 标题: {}", item.get("product_id"), item.get("title"))
           pid = str(item['product_id'])
           detail = assistant.get_detail(pid)
           if not detail: continue

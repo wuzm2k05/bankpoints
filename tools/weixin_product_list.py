@@ -60,7 +60,7 @@ if __name__ == "__main__":
         print(f"橱窗内共有 {len(all_products)} 个商品")
 
         # 取前两个商品
-        target_list = all_products[:2]
+        target_list = all_products
 
         for i, item in enumerate(target_list):
             pid = item.get("product_id")

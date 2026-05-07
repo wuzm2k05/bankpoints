@@ -28,7 +28,7 @@ async def vector_search_wechat_products(query: str):
       outAppId: 用来返回给用户的信息。
       link: 用来返回给用户的信息。
   """
-  _log.info("vector_search_icbc_mall tool: 搜索微信小店商品，查询语句：{}", query)
+  _log.debug("vector_search_icbc_mall tool: 搜索微信小店商品，查询语句：{}", query)
   
   # 假设 ICBCVectorDB 已经支持异步搜索，或者在内部处理了线程池
   icbc_db = ICBCVectorDB()
@@ -44,6 +44,8 @@ async def vector_search_wechat_products(query: str):
       "outAppId": item["outAppId"],
       "link": item["link"]
     })
+  
+  _log.debug("vector_search_wechat_products tool: 搜索到 {} 条结果，返回给模型的内容:\n{}", len(results), ret)
   
   return ret
 
@@ -62,11 +64,13 @@ async def vector_search_icbc_mall(query: str):
   Returns:
     list[dict]: 商品字典列表。每个字典包含: name, points, distance。
   """
-  _log.info("vector_search_icbc_mall tool: 搜索工银i豆商城，查询语句：{}", query)
+  _log.debug("vector_search_icbc_mall tool: 搜索工银i豆商城，查询语句：{}", query)
   
   # 假设 ICBCVectorDB 已经支持异步搜索，或者在内部处理了线程池
   icbc_db = ICBCVectorDB()
   results = await icbc_db.asearch(query, limit=3) 
+  
+  _log.debug("vector_search_icbc_mall tool: 搜索到 {} 条结果，返回给模型的内容:\n{}", len(results), results)
   
   return results
 
@@ -81,7 +85,7 @@ async def search_jd_promotion(keyword: str):
   Returns:
     dict: 京东数据。包含 sku_name, price, promo_link, support_ecard 等。
   """
-  _log.info("search_jd_promotion tool: 搜索京东，关键词：{}", keyword)
+  _log.debug("search_jd_promotion tool: 搜索京东，关键词：{}", keyword)
   
   # 模拟异步 IO 操作（实际场景可换成 httpx 请求）
   jd_database = [
