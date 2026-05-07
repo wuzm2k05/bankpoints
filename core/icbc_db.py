@@ -300,7 +300,6 @@ class ICBCVectorDB(metaclass=SingletonMeta):
     return output
 
   # --- 数据维护方法 (通常在离线脚本中使用，保持同步即可) ---
-
   def add_products(self, products: List[Dict[str, Any]]):
     ids = [p["id"] for p in products]
     documents = [f"商品名称: {p['name']}。所需积分: {p['points']}豆。" for p in products]
@@ -314,6 +313,19 @@ class ICBCVectorDB(metaclass=SingletonMeta):
       metadatas=metadatas
     )
     _log.info("成功导入 {} 条商品数据", len(ids))
+    
+  def rebuild_products(self, products: List[Dict[str, Any]]):
+    """全量重建商品库（会清空原有数据）"""
+    try:
+      self.client.delete_collection(name="icbc_products")
+      self.product_collection = self.client.create_collection(name="icbc_products")
+      _log.info("已清空商品库，准备执行全量导入...")
+    except Exception as e:
+      _log.error("重建商品库失败: {}", e)
+      raise e
+
+    self.add_products(products)
+    _log.success(f"全量导入完成，共计 {len(products)} 条商品数据")
 
   def add_voucher_knowledge(self, qa_list: List[Dict[str, str]]):
     """

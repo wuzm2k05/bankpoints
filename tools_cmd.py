@@ -1,5 +1,6 @@
 import asyncio,sys
 from tools.icbc_voucher_to_db import VoucherKnowledgeBuilder
+from tools.icbc_mall_to_db import build_icbc_mall_db
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -22,7 +23,16 @@ async def main():
     builder = VoucherKnowledgeBuilder()
     builder.run_full_sync(sys.argv[2])
     return
-  
+  elif cmd == "bmd":
+    if len(sys.argv) != 3:
+      print("Usage for build_mall_db: python tools_cmd.py bmd <mall_data_file_path>")
+      return 
+    build_icbc_mall_db()
+    return
+  else:
+    print(f"Unknown command: {cmd}")
+    print("Available commands: bvd (build voucher db), bmd (build mall db)")
+    return
 if __name__ == "__main__":
   try:
     #asyncio.run(query_by_id())

@@ -3,21 +3,18 @@ import re
 import os
 import sys
 from typing import List, Dict, Any
+from decimal import Decimal
+
+from loguru import logger as _log
 
 # 1. 核心修改：将父目录（项目根目录）加入系统路径
 # os.path.dirname(__file__) 获取 tools 目录路径
 # 再取一次 dirname 得到项目根目录
-root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if root_path not in sys.path:
-  sys.path.append(root_path)
+#root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#if root_path not in sys.path:
+#  sys.path.append(root_path)
 
 from core.icbc_db import ICBCVectorDB
-import config.config as config
-import log.logger as logger
-
-_log = logger.get_logger()
-
-# --- 1. 价格解析增强工具 ---
 
 def convert_zh_price(price_str: str) -> int:
   """
@@ -32,7 +29,7 @@ def convert_zh_price(price_str: str) -> int:
   if not num_match:
     return 0
   
-  num = float(num_match.group())
+  num = Decimal(num_match.group())
   
   # 单位换算逻辑
   if '百万豆' in price_str:
@@ -78,24 +75,23 @@ def parse_icbc_file(file_path: str) -> List[Dict[str, Any]]:
   return products
 
 # --- 4. 执行主程序 ---
-
-if __name__ == "__main__":
+def build_icbc_mall_db():
   # 替换为你的 API Key
-  FILE_PATH = sys.argv[1] if len(sys.argv) > 1 else "materials\icbcdou.txt"
+  FILE_PATH = sys.argv[2] if len(sys.argv) > 2 else "materials\icbcdou.txt"
 
   # 1. 解析
   product_list = parse_icbc_file(FILE_PATH)
-  print(f"解析完成，成功提取 {len(product_list)} 个商品。")
+  _log.info(f"解析完成，成功提取 {len(product_list)} 个商品。")
 
   # 打印前 3 个示例确认转换正确
   for p in product_list[:3]:
-    print(f"已解析: {p['name']} -> {p['points']} 积分")
+    _log.info(f"已解析: {p['name']} -> {p['points']} 积分")
 
   if product_list:
     # 2. 写入数据库
     db = ICBCVectorDB()
-    db.add_products(product_list)
+    db.rebuild_products(product_list)
     
-    print("\n--- 写入数据完成 ---")
+    _log.info("\n--- 写入数据完成 ---")
   else:
-    print("未提取到有效商品数据，未进行数据库写入。")
+    _log.warning("未提取到有效商品数据，未进行数据库写入。")
