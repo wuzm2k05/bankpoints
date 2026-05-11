@@ -151,6 +151,11 @@ def get_db_voucher_rules_number():
 def get_resource_file():
   return config.get('files', 'resource', fallback=os.environ.get('FILES_RESOURCE',"data/resource.yaml"))
 
+#################################################################################################
+### for voucher order
+def get_voucher_order_salt():
+  return config.get('voucher_order', 'salt', fallback=os.environ.get('VOUCHER_ORDER_SALT',"")) 
+
 ### output all configrations
 def output_configs(log):
   log.info("=================configs=====================")

@@ -6,8 +6,30 @@ from loguru import logger as _log
 
 import config.config as config
 from core.icbc_db import ICBCVectorDB
+from core.voucher_order import VoucherOrder
 
 # --- 1. 定义工具集 (Tools) ---
+@tool
+def query_voucher_order_status(order_code: str) -> str:
+  """
+  查询工行立减金兑换订单的实时状态和发放详情。
+  
+  入参说明:
+    order_code (str): 订单编码，通常是一串由数字和字母组成的长字符串。
+
+  返回内容示例：
+    "查询成功。详情：订单编码:xxx;订单状态:立减金发放成功;兑换金额:3元;应发:3张1元;..."
+  
+  调用建议：
+    拿到返回字符串后，请发挥你的语义理解能力，提取出‘订单状态’和‘兑换金额’等关键信息，
+    并以友好的 Markdown 格式呈现给用户。
+  """
+  _log.debug(f"正在查询订单状态: {order_code}")
+  voucher_order = VoucherOrder()
+  result = voucher_order.query_voucher_order_status(order_code)
+  _log.debug(f"订单查询结果: {result}")
+  return result
+  
 @tool
 async def vector_search_wechat_products(query: str):
   """
@@ -48,7 +70,6 @@ async def vector_search_wechat_products(query: str):
   _log.debug("vector_search_wechat_products tool: 搜索到 {} 条结果，返回给模型的内容:\n{}", len(results), ret)
   
   return ret
-
 
 @tool
 async def vector_search_icbc_mall(query: str):

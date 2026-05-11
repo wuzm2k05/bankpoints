@@ -19,7 +19,8 @@ from core.llm_tools import (
   #search_jd_promotion, 
   get_points_activities, 
   query_icbc_voucher_rules,
-  vector_search_wechat_products
+  vector_search_wechat_products,
+  query_voucher_order_status
 )
 
 # --- 1. 状态定义 ---
@@ -37,7 +38,8 @@ class RedemptionAgent:
       #"search_jd_promotion": "正在对比京东同款商品的价格与优惠政策...",
       "vector_search_wechat_products": "正在全网对比商品的价格...",
       "get_points_activities": "正在为您查询最新的攒豆活动...",
-      "query_icbc_voucher_rules": "正在确认立减金的兑换限制与风控要求..."
+      "query_icbc_voucher_rules": "正在确认立减金的兑换限制与风控要求...",
+      "query_voucher_order_status": "正在查询您的立减金订单状态..."
     }
     
     #预编译 System Prompt
@@ -61,7 +63,8 @@ class RedemptionAgent:
       #search_jd_promotion,
       vector_search_wechat_products,
       get_points_activities,
-      query_icbc_voucher_rules
+      query_icbc_voucher_rules,
+      query_voucher_order_status
     ]
 
     #绑定工具并构建异步工作流
