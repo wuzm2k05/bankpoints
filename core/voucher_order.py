@@ -40,7 +40,7 @@ class VoucherOrder(metaclass=SingletonMeta):
       if result.get("code") == 1:
         return f"查询成功：{result.get('msg')}"
       elif result.get("code") == 0:
-        return "查询结果：订单不存在，请核对订单编码是否正确。"
+        return "查询结果：订单不存在，请核对订单号是否正确。注意一定要用商户订单号而非银行订单号。"
       else:
         return f"查询失败：{result.get('msg', '未知错误')}"
         

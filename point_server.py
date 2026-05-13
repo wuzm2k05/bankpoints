@@ -8,10 +8,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from loguru import logger as _log
 from redis.asyncio import Redis, ConnectionPool
-from fastapi import WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 
 from core.simple_redis_saver import SimpleRedisSaver
 import config.config as config

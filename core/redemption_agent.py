@@ -198,10 +198,6 @@ class RedemptionAgent:
     # 局部变量，用于追踪状态和缓存最终数据
     has_sent_final_answer = False
     final_products = []
-    last_full_text = ""
-
-    # 正则表达式：匹配 [PRODUCTS_JSON]...[/PRODUCTS_JSON]
-    #json_pattern = r"\[PRODUCTS_JSON\](.*?)\[/PRODUCTS_JSON\]"
 
     try:
       async for event in self.app.astream(
@@ -231,7 +227,7 @@ class RedemptionAgent:
               if getattr(last_msg, 'tool_calls', None):
                 trace_msg = {
                   "seq": seq, "type": "chat", "userCode": user_id,
-                  "status": "success", "isTrace": True, "answer": "正在精算最优方案..."
+                  "status": "success", "isTrace": True, "answer": "正在思考..."
                 }
             
             if trace_msg:
