@@ -15,7 +15,7 @@ class VoucherOrder(metaclass=SingletonMeta):
     查询工行立减金兑换订单的实时状态和发放详情。
     
     入参说明:
-      order_code (str): 订单编码，通常是一串由数字和字母组成的长字符串。
+      order_code (str): 订单编码，通常是一串由纯数字或者数字和字母组成的长字符串。
 
     """
     # 1. 构造 sign (内部逻辑，对 LLM 透明)
@@ -32,15 +32,16 @@ class VoucherOrder(metaclass=SingletonMeta):
 
     try:
       # 3. 发起请求
-      response = requests.get(url, params=params, timeout=10)
+      response = requests.get(url, params=params, timeout=30)
       response.raise_for_status()
       
       # 4. 返回结果给 LLM
       result = response.json()
+      _log.debug(result)
       if result.get("code") == 1:
         return f"查询成功：{result.get('msg')}"
       elif result.get("code") == 0:
-        return "查询结果：订单不存在，请核对订单号是否正确。注意一定要用商户订单号而非银行订单号。"
+        return "查询结果：订单不存在，请核对订单号是否正确。"
       else:
         return f"查询失败：{result.get('msg', '未知错误')}"
         
