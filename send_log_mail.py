@@ -51,16 +51,25 @@ def update_position(pos):
 
 def send_email(attach_file_path, subject, body_text, display_filename):
     """
-    通用邮件发送函数
-    display_filename: 允许指定附件在邮件里显示的名字（这样即使本地是统一文件名，邮件里也可以显示带日期的名字）
+    通用邮件发送函数（支持单人及多人发送）
     """
     if not SENDER_PASSWD:
         print("未找到 EMAIL_PASSWORD 环境变量，无法发送邮件")
         return False
 
+    if not RECEIVER_EMAIL:
+        print("未找到 RECEIVER_EMAIL 环境变量，无法发送邮件")
+        return False
+
+    # 1. 解析群发列表：把 .env 里的逗号字符串转为 Python 列表
+    # 例如 "a@qq.com,b@qq.com" -> ["a@qq.com", "b@qq.com"]
+    receiver_list = [email.strip() for email in RECEIVER_EMAIL.split(",") if email.strip()]
+
     msg = MIMEMultipart()
     msg["From"] = SENDER_EMAIL
-    msg["To"] = RECEIVER_EMAIL
+    
+    # MIME 规范中，msg["To"] 必须是一个用逗号隔开的“字符串”
+    msg["To"] = ", ".join(receiver_list)
     msg["Subject"] = subject
     msg.attach(MIMEText(body_text, "plain", "utf-8"))
 
@@ -70,7 +79,6 @@ def send_email(attach_file_path, subject, body_text, display_filename):
                 part = MIMEBase("application", "octet-stream")
                 part.set_payload(f.read())
                 encoders.encode_base64(part)
-                # 在邮件中显示更友好的、带日期的文件名
                 part.add_header(
                     "Content-Disposition", f"attachment; filename={display_filename}"
                 )
@@ -83,8 +91,12 @@ def send_email(attach_file_path, subject, body_text, display_filename):
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWD)
-            server.send_message(msg)
-        print(f"邮件发送成功: {subject}")
+            
+            # 2. 关键改动：使用 sendmail 方法显式传入收件人列表
+            # 这样可以确保 SMTP 服务器能够正确地将信件投递到每一个邮箱
+            server.sendmail(SENDER_EMAIL, receiver_list, msg.as_string())
+            
+        print(f"邮件成功发送至群组 (共 {len(receiver_list)} 个邮箱): {subject}")
         return True
     except Exception as e:
         print(f"SMTP 发送异常: {e}")
