@@ -20,14 +20,23 @@ from core.llm_tools import (
   get_points_activities, 
   query_icbc_voucher_rules,
   vector_search_wechat_products,
-  query_voucher_order_status
+  query_voucher_order_status,
+  create_voucher_order
 )
+
+class RouterDecision(TypedDict):
+  next_agent: str
+  is_final_out: bool
 
 # --- 1. 状态定义 ---
 class AgentState(TypedDict):
   # 这里的 operator.add 用于合并消息历史
   messages: Annotated[List[BaseMessage], operator.add]
   user_points: Optional[int]
+  current_agent: str
+  points_exchange_active: bool
+  goods_exchange_active: bool
+  target_agent: Optional[str]
 
 class RedemptionAgent:
   def __init__(self,saver: SimpleRedisSaver):
@@ -39,7 +48,8 @@ class RedemptionAgent:
       "vector_search_wechat_products": "正在全网对比商品的价格...",
       "get_points_activities": "正在为您查询最新的攒豆活动...",
       "query_icbc_voucher_rules": "正在确认立减金的兑换限制与风控要求...",
-      "query_voucher_order_status": "正在查询您的立减金订单状态..."
+      "query_voucher_order_status": "正在查询您的立减金订单状态...",
+      "create_voucher_order": "正在为您创建立减金兑换订单..."
     }
     
     #预编译 System Prompt
@@ -51,7 +61,7 @@ class RedemptionAgent:
     )
     
     #获取支持异步的 LLM 实例
-    self.llm = model_factory.get_model()
+    self.base_llm = model_factory.get_model()
 
     #初始化异步持久化层
     self.checkpointer = saver
@@ -64,11 +74,25 @@ class RedemptionAgent:
       vector_search_wechat_products,
       get_points_activities,
       query_icbc_voucher_rules,
-      query_voucher_order_status
+      query_voucher_order_status,
+      create_voucher_order
     ]
+    
+    self.agent_tools_config = {
+      "router": [], # 路由网关纯聊天/做决策，不需要任何工具
+      "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities],
+      "points_exchange": [create_voucher_order,query_icbc_voucher_rules],
+      "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products]
+    }
+    
+    self.runnable_agents = {
+      "router": self.base_llm, # 不绑定工具
+      "customer_service": self.base_llm.bind_tools(self.agent_tools_config["customer_service"]),
+      "points_exchange": self.base_llm.bind_tools(self.agent_tools_config["points_exchange"]),
+      "goods_exchange": self.base_llm.bind_tools(self.agent_tools_config["goods_exchange"])
+    }
 
     #绑定工具并构建异步工作流
-    self.model_with_tools = self.llm.bind_tools(self.tools)
     self.tool_node = ToolNode(self.tools)
     self.app = self._build_workflow().compile(
       checkpointer=self.checkpointer
@@ -82,15 +106,43 @@ class RedemptionAgent:
     """构建 LangGraph 异步状态机"""
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("agent", self._call_model)
+    workflow.add_node("router_node", self._call_router_agent)
+    workflow.add_node("customer_service_node", self._process_agent_node)
+    workflow.add_node("points_exchange_node", self._process_agent_node)
+    workflow.add_node("goods_exchange_node", self._process_agent_node)
     workflow.add_node("tools", self.tool_node)
+    
+    workflow.set_entry_point("router_node")
+    workflow.add_conditional_edges("router_node", self._router)
+    workflow.add_conditional_edges("customer_service_node", self._sub_agent_router)
+    workflow.add_conditional_edges("points_exchange_node", self._sub_agent_router)
+    workflow.add_conditional_edges("goods_exchange_node", self._sub_agent_router)
+    workflow.add_conditional_edges("tools", self._tool_return_router)
 
-    workflow.set_entry_point("agent")
-    workflow.add_conditional_edges("agent", self._router)
-    workflow.add_edge("tools", "agent")
+    #workflow.add_node("agent", self._call_model)
+    #workflow.add_node("tools", self.tool_node)
+
+    #workflow.set_entry_point("agent")
+    #workflow.add_conditional_edges("agent", self._router)
+    #workflow.add_edge("tools", "agent")
 
     return workflow
 
+  async def _call_router_agent(self, state: AgentState):
+    ...
+  
+  async def _process_agent_node(self, state: AgentState):
+    ...
+  
+  def _gateway_router(self, state: AgentState):
+    ...
+  
+  def _sub_agent_router(self, state: AgentState):
+    ...
+  
+  def _tool_return_router(self, state: AgentState):
+    ...
+    
   async def _call_model(self, state: AgentState):
     _log.debug("--- 正在调用 LLM ---")
     messages = [self.base_system_message] + state["messages"]

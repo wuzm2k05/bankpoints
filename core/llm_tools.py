@@ -1,4 +1,6 @@
 # 2 个空格对齐
+from typing import Dict, List
+
 from langchain_core.tools import tool
 from loguru import logger as _log
 
@@ -7,6 +9,11 @@ from core.icbc_db import ICBCVectorDB
 from core.voucher_order import VoucherOrder
 
 # --- 1. 定义工具集 (Tools) ---
+@tool
+def create_voucher_order(total_amount: int, vouchers: List[Dict]) -> str:
+  ...
+
+
 @tool
 def query_voucher_order_status(order_code: str) -> str:
   """
