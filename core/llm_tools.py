@@ -1,4 +1,5 @@
 # 2 个空格对齐
+import json
 from typing import Dict, List
 
 from langchain_core.tools import tool
@@ -10,10 +11,43 @@ from core.voucher_order import VoucherOrder
 
 # --- 1. 定义工具集 (Tools) ---
 @tool
-def create_voucher_order(total_amount: int, vouchers: List[Dict]) -> str:
-  ...
-
-
+def create_voucher_order(total_points: int, vouchers: List[Dict]) -> str:
+  """
+  创建工行立减金兑换订单。
+  用户确认兑换方案后调用，一次提交完整订单。
+  
+  Args:
+    total_points: 本次消耗的i豆总数，例如 123200
+    vouchers: 兑换清单，例如：
+      [
+        {"amount": 100, "card_type": "debit",  "quantity": 1},
+        {"amount": 10,  "card_type": "debit",  "quantity": 2},
+        {"amount": 1,   "card_type": "credit", "quantity": 2}
+      ]
+  
+  Returns:
+    JSON字符串，包含订单的支付链接。这个链接一次支付所有立减金的兑换。
+    成功例子：{
+      "code": 0,
+      "message": "success",
+      "data": {
+        "pay_url": "https://www.pinlenet.com.cn/jifen/lijianjin/pay?orderCode=xxx",
+        "order_code": "2223234123423423423423"
+      }
+    }
+    失败例子：{
+      "code": 1,
+      "message": "兑换失败，原因：xxxx"
+    }
+  """
+  return json.dumps({
+    "code": 0,
+    "message": "success",
+    "data": {
+      "pay_url": "https://www.pinlenet.com.cn/jifen/lijianjin/pay?orderCode=xxx",
+      "order_code": "2223234123423423423423"
+    }
+  }, ensure_ascii=False)
 @tool
 def query_voucher_order_status(order_code: str) -> str:
   """

@@ -19,13 +19,9 @@ token_server_port = 8444
 host = "node09.cn"
 msg_server_port = 8443
 
-
-
 ### online test configure
 #host = "www.node09.cn"
 #msg_server_port = 9443
-
-
 
 # --- 1. mTLS Token 管理逻辑 ---
 async def manage_token(cmd: str, token_to_cancel: str = None) -> Optional[str]:
