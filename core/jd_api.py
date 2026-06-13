@@ -40,7 +40,7 @@ class JDUnionClient:
 
   def _request(self, method: str, biz_params: dict) -> dict:
     # 关键修改：ensure_ascii=False
-  # separators=(',', ':') 也是必须的，去掉多余空格
+    # separators=(',', ':') 也是必须的，去掉多余空格
     param_json_str = json.dumps(
       biz_params, 
       ensure_ascii=False, 
@@ -177,10 +177,10 @@ class JDUnionClient:
     }
     
     biz_params = {
-    "goodsReqDTO": {
-      "keyword": "小米"
+      "goodsReqDTO": {
+        "keyword": "小米"
+      }
     }
-}
     # 调用 jd.union.open.goods.query
     res = self._request("jd.union.open.goods.query", biz_params)
     _log.info(f"SKU ID 搜索测试结果: {res}")
