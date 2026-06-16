@@ -51,15 +51,12 @@ class RedemptionAgent:
     }
     
     config_resource = resource.get_resource()["default_values"]
-  
-    # 🌟【核心注入】：获取全局唯一的统一输出 JSON 规范
-    unified_json_spec = config_resource["UNIFIED_JSON_SPEC"]
     
     # 2. 动态拼接各个子 Agent 的专属提示词 (追加全局规范)
-    router_agent_system_prompt = f"{config_resource['ROUTER_AGENT_PROMPT']}\n\n{unified_json_spec}"
-    customer_service_agent_system_prompt = f"{config_resource['CUSTOMER_SERVICE_AGENT_PROMPT']}\n\n{unified_json_spec}"
-    points_exchange_agent_system_prompt = f"{config_resource['POINTS_EXCHANGE_AGENT_PROMPT']}\n\n{unified_json_spec}"
-    goods_exchange_agent_system_prompt = f"{config_resource['GOODS_EXCHANGE_AGENT_PROMPT']}\n\n{unified_json_spec}"
+    router_agent_system_prompt = self._replace_prompt_variables(config_resource['ROUTER_AGENT_PROMPT'])
+    customer_service_agent_system_prompt = self._replace_prompt_variables(config_resource['CUSTOMER_SERVICE_AGENT_PROMPT'])
+    points_exchange_agent_system_prompt = self._replace_prompt_variables(config_resource['POINTS_EXCHANGE_AGENT_PROMPT'])
+    goods_exchange_agent_system_prompt = self._replace_prompt_variables(config_resource['GOODS_EXCHANGE_AGENT_PROMPT'])
     
     #voucher_rate = config.get_icbc_voucher_rate()
  
@@ -85,7 +82,7 @@ class RedemptionAgent:
       "router": [], # 路由网关纯聊天/做决策，不需要任何工具
       "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities],
       "points_exchange": [create_voucher_order],
-      "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products]
+      "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products,get_points_activities] # 商品导购也可以查询攒豆活动，作为辅助信息
     }
     
     self.agent_system_prompts = {
@@ -111,7 +108,53 @@ class RedemptionAgent:
     self.json_pattern = re.compile(r"\[PRODUCTS_JSON\](.*?)\[/PRODUCTS_JSON\]", re.DOTALL)
     
     _log.info("RedemptionAgent 异步工作流编译完成")
+    
+  def _replace_prompt_variables(self, prompt_template: str) -> str:
+    """
+    替换提示词模板中的所有嵌套占位符变量。
+    采用拓扑顺序（由原子能力 -> 拦截规则 -> 整体拼装），并完美兼容全局规范占位符。
+    """
+    config_resource = resource.get_resource()["default_values"]
 
+    # 1. 提取最底层的【原子能力描述】与【全局输出 JSON 规范】
+    capability_cs = config_resource["CUSTOMER_SERVICE_AGENT_CAPABILITY"]
+    capability_points = config_resource["POINTS_EXCHAGNGE_AGENT_CAPABILITY"]
+    capability_goods = config_resource["GOODS_EXCHAGE_AGENT_CAPABILITY"]
+    unified_json_spec = config_resource["UNIFIED_JSON_SPEC"]
+
+    # 2. 拓扑级组装【中转拦截规则】（先把原子能力注入到拦截器文本中）
+    goto_customer_service = config_resource["GOTO_CUSTOMER_SERVICE_RULE"]\
+        .replace("{CUSTOMER_SERVICE_AGENT_CAPABILITY}", capability_cs)
+        
+    goto_points_exchange = config_resource["GOTO_POINTS_EXCHANGE_RULE"]\
+        .replace("{POINTS_EXCHAGNGE_AGENT_CAPABILITY}", capability_points)
+        
+    goto_goods_exchange = config_resource["GOTO_GOODS_EXCHANGE_RULE"]\
+        .replace("{GOODS_EXCHAGE_AGENT_CAPABILITY}", capability_goods)
+        
+    goto_router = config_resource["GOTO_ROUTER_RULE"]
+
+    # 3. 提取全局兑换率（硬编码适配 yaml 中的 {{voucher_rate}}，依据 points 房间 1100豆/元 铁律）
+    try:
+        from config.config import get_icbc_voucher_rate
+        voucher_rate_str = str(get_icbc_voucher_rate())
+    except Exception:
+        voucher_rate_str = "1100"
+
+    # 4. 执行全量点对点安全替换（避免 format 导致的数学公式 $P_{icbc}$ 报错）
+    rendered_prompt = prompt_template\
+        .replace("{CUSTOMER_SERVICE_AGENT_CAPABILITY}", capability_cs)\
+        .replace("{POINTS_EXCHAGNGE_AGENT_CAPABILITY}", capability_points)\
+        .replace("{GOODS_EXCHAGE_AGENT_CAPABILITY}", capability_goods)\
+        .replace("{GOTO_CUSTOMER_SERVICE_RULE}", goto_customer_service)\
+        .replace("{GOTO_POINTS_EXCHANGE_RULE}", goto_points_exchange)\
+        .replace("{GOTO_GOODS_EXCHANGE_RULE}", goto_goods_exchange)\
+        .replace("{GOTO_ROUTER_RULE}", goto_router)\
+        .replace("{UNIFIED_JSON_SPEC}", unified_json_spec)\
+        .replace("{{voucher_rate}}", voucher_rate_str)
+        
+    return rendered_prompt
+  
   def _build_workflow(self):
     """构建 LangGraph 异步状态机"""
     workflow = StateGraph(AgentState)
@@ -190,6 +233,7 @@ class RedemptionAgent:
     
     # 1. 组装基础上下文：大模型专属系统提示词 + 历史消息
     base_messages = [self.agent_system_prompts[curr]] + state["messages"]
+    _log.debug(f"送给大模型的消息: {base_messages}")
     
     MAX_RETRY = 1
     retry_count = 0
@@ -285,17 +329,24 @@ class RedemptionAgent:
     
     _log.debug(f"🧭 路由研判 -> 驻留地: [{curr_node}] | 意图去往: [{next_node}] | 模式: [{flow_status}]")
     
-    # 判定 1：申请目的地与当前房间一致，且进入最终交付状态，说明在子系统内部圆满闭环，挂起图等待下一次用户发言
-    if curr_node == next_node and flow_status == "FINAL_RESPONSE":
-      _log.debug(f"🏁 业务在 [{curr_node}] 成功闭环，冻结本轮生命周期。")
+    # 判定 1：大模型要求最终交付 (FINAL_RESPONSE)
+    # 无论 next_agent 填了谁，只要是 FINAL_RESPONSE，就代表本轮要对人类说话了，必须退出图，冻结本轮生命周期。
+    if flow_status == "FINAL_RESPONSE":
+      _log.debug(f"🏁 交付状态确立：在 [{curr_node}] 输出最终文本，成功闭环，挂起等待用户下一次发言。")
       return END
-      
-    # 判定 2：申请目的地发生了偏移，或者是显式的后台 INTERIM 中转，立刻无感切流跳转
-    if next_node != curr_node or flow_status == "INTERIM":
+        
+    # 判定 2：大模型要求后台静默中转 (INTERIM)
+    if flow_status == "INTERIM":
+      # 如果大模型犯糊涂，指明了 INTERIM 却不切房间（自循环），强制退出防止死循环
+      if next_node == curr_node:
+        _log.warning(f"⚠️ 警告：Agent [{curr_node}] 触发了自循环的 INTERIM 中转，为防止后台死循环，强制切断并退出。")
+        return END
+          
       target_node = "router_node" if next_node == "router" else f"{next_node}_node"
-      _log.debug(f"🔄 路由总线触发跨系统连线：[{curr_node }] -> [{target_node}]")
+      _log.debug(f"🔄 路由总线触发【后台无感连线】：[{curr_node}] -> [{target_node}]")
       return target_node
-      
+        
+    # 保底拦截
     return END
   
   def _tool_return_router(self, state: AgentState):
