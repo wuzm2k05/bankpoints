@@ -20,7 +20,8 @@ from core.llm_tools import (
   get_points_activities, 
   query_icbc_voucher_rules,
   vector_search_wechat_products,
-  query_voucher_order_status
+  query_voucher_order_status,
+  create_voucher_order
 )
 
 # --- 1. 状态定义 ---
@@ -39,11 +40,12 @@ class RedemptionAgent:
       "vector_search_wechat_products": "正在全网对比商品的价格...",
       "get_points_activities": "正在为您查询最新的攒豆活动...",
       "query_icbc_voucher_rules": "正在确认立减金的兑换限制与风控要求...",
-      "query_voucher_order_status": "正在查询您的立减金订单状态..."
+      "query_voucher_order_status": "正在查询您的立减金订单状态...",
+      "create_voucher_order": "正在为您创建立减金兑换订单..."
     }
     
     #预编译 System Prompt
-    raw_prompt = resource.get_resource()["default_values"]["analyze_intent_system_prompt"]
+    raw_prompt = resource.get_resource()["default_values"]["big_agent_system_prompt"]
     voucher_rate = config.get_icbc_voucher_rate()
     # 在初始化时就存入内存，后续直接引用
     self.base_system_message = SystemMessage(
@@ -64,7 +66,8 @@ class RedemptionAgent:
       vector_search_wechat_products,
       get_points_activities,
       query_icbc_voucher_rules,
-      query_voucher_order_status
+      query_voucher_order_status,
+      create_voucher_order
     ]
 
     #绑定工具并构建异步工作流
