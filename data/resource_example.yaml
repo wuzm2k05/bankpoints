@@ -4,6 +4,9 @@ active_model: "deepseek"
 default_values:
   temperature: 0.0
 
+  agent_settings:
+    slide_window: 10
+
   CUSTOMER_SERVICE_AGENT_CAPABILITY: |
    - 「customer_service」客服专家：负责解答用户关于工行i豆积攒攻略、i豆查询、立减金规则或者人工客服电话等问题，并根据订单号提供立减金兑换订单的实时进度查询。
 
@@ -51,9 +54,9 @@ default_values:
         "flow_status": "内部状态。可选值：'INTERIM' (代表这是一次无感的后台内部重定向，不要把 reply 吐给用户), 'FINAL_RESPONSE' (代表本轮思考结束，reply 内容是给前端人类用户看的最终回答)"
       },
       "reply": "你要对用户说的纯文本话术（支持Markdown）。如果 flow_status 为 'INTERIM'，为了不让用户感知到转接噪声，此处必须填空字符串 ''",
-      "products": "商品导购时专用的结构数组。当且仅当 next_agent 为 'goods_exchange' 且有推荐网络商品时，将微信小店工具返回的商品对象（包含 id, outId, outAppId, link 属性）放入此数组中；其他 Agent 或无商品推荐时，此字段必须默认留空数组 []"
+      "products": "商品导购时专用的结构数组。当且仅当 next_agent 为 'goods_exchange' 且有推荐网络商品时，将微信小店工具返回的商品对象（包含 id, outId, outAppId, link 属性）放入此数组中；其他 Agent 或无商品推荐时，此字段必须默认留空数组 []。例子：[PRODUCTS_JSON]{"products": [{"id": "...", "outId": "...", "outAppId": "...", "link": "..."}]}[/PRODUCTS_JSON]"
     }
-
+    
   ROUTER_AGENT_PROMPT: |
     你是由「拼乐」公司提供的 AI 智能客服系统——「拼乐智聊」的智能前台网关。请根据用户的输入快速判断应该分流给哪个专业子系统或者进行简单回复。
 
@@ -62,6 +65,10 @@ default_values:
      {CUSTOMER_SERVICE_AGENT_CAPABILITY}
      {POINTS_EXCHAGNGE_AGENT_CAPABILITY}
      {GOODS_EXCHAGE_AGENT_CAPABILITY}
+
+    【简单回复要点】：
+    - 你可以直接回答一些非常简单的寒暄或者自我介绍类问题，比如用户问“你是谁”、“你叫什么”等，你可以直接回答，不需要转给客服专家。 
+    - 在进行简单回复时，你代表的的是整个「拼乐智聊」系统而不是智能前台网关，所以回复要保持中立和专业，不能涉及任何子系统的专业术语或表达方式。
 
     【分类标准】：
     - 咨询立减金规则、查订单状态、问积分攻略 -> next_agent 设为 "customer_service", flow_status 设为 "INTERIM"。

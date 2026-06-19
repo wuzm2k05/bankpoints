@@ -6,7 +6,7 @@ from pydantic import BaseModel,Field
 from loguru import logger as _log
 
 # 异步组件导入
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage,RemoveMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
@@ -58,7 +58,7 @@ class RedemptionAgent:
     points_exchange_agent_system_prompt = self._replace_prompt_variables(config_resource['POINTS_EXCHANGE_AGENT_PROMPT'])
     goods_exchange_agent_system_prompt = self._replace_prompt_variables(config_resource['GOODS_EXCHANGE_AGENT_PROMPT'])
     
-    #voucher_rate = config.get_icbc_voucher_rate()
+    self.slide_window = config_resource['agent_settings']['slide_window']
  
     #获取支持异步的 LLM 实例
     self.base_llm = model_factory.get_model()
@@ -104,9 +104,7 @@ class RedemptionAgent:
     self.app = self._build_workflow().compile(
       checkpointer=self.checkpointer
     )
-    
-    self.json_pattern = re.compile(r"\[PRODUCTS_JSON\](.*?)\[/PRODUCTS_JSON\]", re.DOTALL)
-    
+     
     _log.info("RedemptionAgent 异步工作流编译完成")
     
   def _replace_prompt_variables(self, prompt_template: str) -> str:
@@ -185,54 +183,21 @@ class RedemptionAgent:
     last_node = state.get("current_agent", "router")
     return f"{last_node}_node"
     
-  def _parse_and_bridge_contract(self, response_content: str) -> Dict[str, Any]:
-    """
-    【核心桥接】：解析全新的统一契约 JSON 字段，并将其反向包装。
-    自动将其组装成原来 stream_chat 认可的 [PRODUCTS_JSON] 文本标记块！
-    从而在不需要改动 stream_chat 任何正则行数的前提下，实现向下兼容。
-    """
-    try:
-      clean_res = re.sub(r'```json\n?|\n?```', '', response_content).strip()
-      res_json = json.loads(clean_res)
-      
-      decision = res_json.get("router_decision", {"next_agent": "router", "flow_status": "FINAL_RESPONSE"})
-      reply = res_json.get("reply", "")
-      products = res_json.get("products", [])
-      
-      # 💥 关键桥接拼装：如果模型包含导购商品，将其拼装成旧代码期待的 [PRODUCTS_JSON] 格式
-      bridged_content = reply
-      if products:
-        old_format_json = {"products": []}
-        for item in products:
-          # 反向映射适配
-          old_format_json["products"].append({
-            "outAppId": item.get("appid", ""),
-            "outId": item.get("productId", ""),
-            "link": item.get("productPromotionLink", "")
-          })
-        bridged_content += f"\n[PRODUCTS_JSON]{json.dumps(old_format_json)}[/PRODUCTS_JSON]"
-
-      return {
-        "parse_success": True,
-        "router_decision": decision,
-        "bridged_content": bridged_content
-      }
-    except Exception as e:
-      _log.error(f"契约协议拆解转换失败，强制走兜底兼容逻辑: {e}")
-      _log.debug(f"原始响应内容: {response_content}")
-      return {
-        "parse_success": False,
-        "router_decision": {"next_agent": "router", "flow_status": "FINAL_RESPONSE"},
-        "bridged_content": response_content
-      }
-      
   async def _process_agent_node(self, state: AgentState):
     decision = state.get("router_decision") or {}
     curr = decision.get("next_agent") or state.get("current_agent") or "router"
     _log.debug(f"--- [节点响应中: {curr}] ---")
     
+    # 长对话滑动窗口裁剪，避免上下文无限膨胀
+    raw_messages = state["messages"]
+    if len(raw_messages) > self.slide_window:
+      truncated_messages = raw_messages[-self.slide_window:]
+      _log.debug(f"针对 [{curr}] 触发长对话裁剪，历史从 {len(raw_messages)} 压至 {self.slide_window} 条")
+    else:
+      truncated_messages = raw_messages
+    
     # 1. 组装基础上下文：大模型专属系统提示词 + 历史消息
-    base_messages = [self.agent_system_prompts[curr]] + state["messages"]
+    base_messages = [self.agent_system_prompts[curr]] + truncated_messages
     _log.debug(f"送给大模型的消息: {base_messages}")
     
     MAX_RETRY = 1
@@ -243,6 +208,7 @@ class RedemptionAgent:
     
     # 首次尝试获取大模型响应
     response = await self.runnable_agents[curr].ainvoke(base_messages)
+    clean_res = response
     _log.debug(f"原始响应: {response}")
     
     while retry_count <= MAX_RETRY:
@@ -254,26 +220,21 @@ class RedemptionAgent:
           "messages": [response] # 工具意图正常存入历史
         }
       
-      # 🌟 文本协议校验
-      bridge_data = self._parse_and_bridge_contract(response.content)
-      
-      if bridge_data["parse_success"]:
-        # 【情况 A】成功：无论是一次成功还是重试后成功，都跳出循环
+      # 🌟【纯 JSON 契约解析验证】：直接验证标准格式
+      try:
+        clean_res = re.sub(r'```json\n?|\n?```', '', response.content).strip()
+        parsed_json = json.loads(clean_res)
+        router_decision = parsed_json.get("router_decision", {"next_agent": "router", "flow_status": "FINAL_RESPONSE"})
         break
-      else:
-        # 【情况 B】失败：触发原地自愈，秘密积累局部重试上下文
+      except Exception as e:
         retry_count += 1
         if retry_count <= MAX_RETRY:
-          _log.warning(f"⚠️ [{curr}] 第 {retry_count} 次解析 JSON 契约失败，触发原地自我纠错...")
+          _log.warning(f"⚠️ [{curr}] 第 {retry_count} 次解析 JSON 契约失败，触发自我纠错...")
           fix_hint = HumanMessage(content="【格式错误】你的上一次回复不符合 JSON Schema 规范！请移除任何 Markdown 标记（如 ```json），直接输出符合 Schema 的纯 JSON 字符串，不要包含任何解释性文字。")
-          
-          # 在局部上下文里滚雪球，大模型能看到它错在哪了，从而实现纠错
           local_retry_context.extend([response, fix_hint])
-          
-          # 重新调用
           response = await self.runnable_agents[curr].ainvoke(base_messages + local_retry_context)
         else:
-          _log.error(f"❌ [{curr}] 历经 {MAX_RETRY} 次纠错重试后依旧失败，触发终极防死锁降级话术。")
+          _log.error(f"❌ [{curr}] 历经纠错后依旧失败，触发降级兜底。{e}")
 
     # 2. 判定最终结果
     if retry_count > MAX_RETRY:
@@ -289,26 +250,51 @@ class RedemptionAgent:
       }
       
       perfect_response = AIMessage(content=json.dumps(fake_json_contract, ensure_ascii=False))
-      bridge_data = {
-        "router_decision": fake_json_contract["router_decision"],
-        "bridged_content": fallback_text
-      }
+      router_decision = fake_json_contract["router_decision"] 
     else:
       # 💥 正常/重试成功情况：将解析转换好的干净内容强行挂载到 response 消息中
       # 关键秘密：我们用最后这个完美的 response，直接替换并代表整个重试过程！
-      perfect_response = response
+      perfect_response = AIMessage(content=clean_res)
 
     # 3. 决定是否将消息存入 LangGraph 历史大池子
-    flow_status = bridge_data["router_decision"].get("flow_status", "FINAL_RESPONSE")
-    perfect_response.additional_kwargs["bridged_content"] = bridge_data["bridged_content"]
+    flow_status = router_decision.get("flow_status", "FINAL_RESPONSE") if isinstance(router_decision, dict) else "FINAL_RESPONSE"
+    saved_messages = [perfect_response] 
+    
+    # ToolMessage 垃圾回收 与 消息脱水
+    if flow_status == "FINAL_RESPONSE": 
+      #【倒序极速扫描】：从最新的一条消息开始往前瞅
+      for msg in reversed(state.get("messages",[])):
+        # 工业级防御：兼容从持久化层读出来的 dict 格式或标准 Message 对象
+        msg_type = getattr(msg, "type", None) or msg.get("type") if isinstance(msg, dict) else None
+        msg_id = getattr(msg, "id", None) or msg.get("id") if isinstance(msg, dict) else None
+        has_tool_calls = getattr(msg, "tool_calls", None) or msg.get("tool_calls") if isinstance(msg, dict) else None
+
+        # 情况 A：如果是工具返回的结果，物理删除
+        if msg_type == "tool" and msg_id:
+          saved_messages.append(RemoveMessage(id=msg_id))
+          _log.debug(f"🧹 已向状态机发射删除信号：ToolMessage (ID: {msg_id})")
+          
+        # 情况 B：如果是本轮大模型吐出的、带有 tool_calls 的中间态思考消息，也物理删除
+        elif msg_type == "ai" and has_tool_calls and msg_id:
+          saved_messages.append(RemoveMessage(id=msg_id))
+          _log.debug(f"🧹 已向状态机发射删除信号：带有 tool_calls 的 AIMessage (ID: {msg_id})")
+          
+        # 情况 C：💥【核心刹车点】一旦撞到了人类的发言，或者撞到了上一轮老AI发言
+        # 说明本轮产生的工具流碎片已经“全部全员靠岸并扫描完毕”了，立刻切断循环！
+        elif msg_type in ["human", "user"] or msg_type == "ai":
+          _log.debug(f"⚡ 倒序扫描本轮碎片完成，在消息 [{msg_type}] 处触发高性能刹车")
+          break
+          
+        else:
+          continue
     
     return {
       "current_agent": curr,
-      "router_decision": bridge_data["router_decision"],
+      "router_decision": router_decision,
       # 🌟 绝不在 messages 里返回 local_retry_context！
       # 我们只返回 perfect_response。在外部（历史记录和图状态）看来，这个 Agent 极其完美，
       # 永远是一次性就吐出了正确格式的消息，中间狼狈的纠错痕迹随风蒸发，绝对不落盘！
-      "messages": [perfect_response] if flow_status == "FINAL_RESPONSE" else []
+      "messages": saved_messages if flow_status == "FINAL_RESPONSE" else []
     }
     
   def _central_conditional_router(self, state: AgentState):
@@ -364,18 +350,14 @@ class RedemptionAgent:
     
     history = []
     if state and "messages" in state.values:
-      msgs = state.values["messages"]
-      
-      for msg in msgs:
+      for msg in state.values["messages"]:
         # 获取基础属性
         content = getattr(msg, 'content', '') or (msg.get('content', '') if isinstance(msg, dict) else '')
         msg_type = getattr(msg, 'type', '') or (msg.get('type', '') if isinstance(msg, dict) else '')
         tool_calls = getattr(msg, 'tool_calls', None) or (msg.get('tool_calls') if isinstance(msg, dict) else None)
 
         # --- 1. 基础过滤 ---
-        if not content or not str(content).strip():
-          continue
-        if msg_type == "tool" or tool_calls:
+        if not content or not str(content).strip() or msg_type == "tool" or tool_calls:
           continue
 
         # --- 2. 角色判定与内容清洗 ---
@@ -383,50 +365,20 @@ class RedemptionAgent:
           history.append({"role": "user", "content": content})
           
         elif msg_type == "ai":
-          raw_content = str(content)
-          # 尝试从内容中提取 JSON 协议块
-          match = self.json_pattern.search(raw_content)
-          
-          # 默认值
-          clean_content = raw_content
-          products = []
+          try:
+            # 为什么我们还要清洗？纯粹防御性的。。。
+            clean_res = re.sub(r'```json\n?|\n?```', '', str(content)).strip()
+            js_data = json.loads(clean_res) if clean_res else {}
 
-          if match:
-            try:
-              # 提取并解析 JSON
-              json_str = match.group(1).strip()
-              product_data = json.loads(json_str)
-              raw_products = product_data.get("products", [])
+            if isinstance(js_data, dict) and "reply" in js_data:
+              clean_content = js_data.get("reply", "")
+              history.append({"role": "assistant", "content": clean_content})
+            else:
+              history.append({"role": "assistant", "content": str(content)})
+        
+          except Exception:
+            history.append({"role": "assistant", "content": str(content)})
               
-              # 映射为前端标准格式
-              try:  
-                for item in raw_products:
-                  products.append({
-                    "source": "wechat",
-                    "appid": item["outAppId"],
-                    "productId": item["outId"],
-                    "productPromotionLink": item["link"]
-                  })
-              except Exception as e:
-                _log.error(f"compose products in ai message error : {str(e)}")
-                # error then we don't use products
-                products = []
-                
-              # 清洗正文，剔除协议块
-              clean_content = self.json_pattern.sub("", raw_content).strip()
-            except Exception as e:
-              _log.error(f"历史记录解析 JSON 失败: {str(e)}")
-
-          # 特殊情况：如果内容被清洗后为空（例如 AI 只发了 JSON），则跳过或保留原样
-          if not clean_content and not products:
-            continue
-          
-          msg = {"role": "assistant","content": clean_content}
-          if products:
-            msg["products"] = products
-            
-          history.append(msg)
-          
     return history
   
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
@@ -485,52 +437,37 @@ class RedemptionAgent:
             if trace_msg:
               await websocket.send_json(trace_msg)
 
-          # --- 2. 处理 Agent 的最终文本输出 ---
-          # 💥 扩展适配点：将原本仅匹配独活节点 "agent" 的判断，对等升级为匹配我们的网格计算节点群
+          # --- 2. 处理 Agent nodes 的最终文本输出 ---
           if node_name in ["router_node", "customer_service_node", "points_exchange_node", "goods_exchange_node"]:
             messages = output.get("messages", [])
             if not messages:
               continue
               
             last_msg = messages[-1]
-            
-            decision = output.get("router_decision")
-            if not decision:
-              state_snap = await self.app.aget_state(config_dict)
-              decision = state_snap.values.get("router_decision", {}) if state_snap else {}
-            
-            flow_status = decision.get("flow_status", "FINAL_RESPONSE") if isinstance(decision, dict) else "FINAL_RESPONSE"
+            decision = output.get("router_decision") or {}
+            flow_status = decision.get("flow_status", "FINAL_RESPONSE") 
             
             if last_msg.content and not getattr(last_msg, 'tool_calls', None) and flow_status == "FINAL_RESPONSE":
-              # 🌟 改为从刚才的适配字段中拿取清洗后的文本，如果拿不到才走原来的逻辑
-              if "bridged_content" in last_msg.additional_kwargs:
-                raw_content = last_msg.additional_kwargs["bridged_content"]
-              else:
-                raw_content = str(last_msg.content)
-              #raw_content = str(last_msg.content)
-              match = self.json_pattern.search(raw_content)
-              display_answer = raw_content
-              
-              if match:
-                try:
-                  json_str = match.group(1).strip()
-                  product_data = json.loads(json_str)
-                  final_products = product_data.get("products", [])
-                  display_answer = self.json_pattern.sub("", raw_content).strip()
-                except Exception as je:
-                  _log.error("解析隐藏商品 JSON 失败: {}", je)
-
-              has_sent_final_answer = True
-              
-              _log.debug(f"send answer back: {display_answer}")
-              await websocket.send_json({
-                "seq": seq,
-                "type": "chat",
-                "userCode": user_id,
-                "status": "success",
-                "isTrace": False,
-                "answer": display_answer
-              })
+              try:
+                # 为什么我们还要清洗？纯粹防御性的。。。
+                clean_res = re.sub(r'```json\n?|\n?```', '', str(last_msg.content)).strip()
+                contract_data = json.loads(clean_res) if clean_res else {}
+                
+                display_answer = contract_data.get("reply", "")
+                final_products = contract_data.get("products", [])
+                has_sent_final_answer = True
+                
+                _log.debug(f"通过契约成功解析回传文本: {display_answer}")
+                await websocket.send_json({
+                  "seq": seq,
+                  "type": "chat",
+                  "userCode": user_id,
+                  "status": "success",
+                  "isTrace": False,
+                  "answer": display_answer
+                })
+              except Exception as parse_err:
+                _log.error(f"stream_chat 实时解析契约 JSON 出现意外错误: {parse_err}")   
 
       # --- 3. 发送结束信号 (Status: end) ---
       return_products = []
@@ -538,9 +475,9 @@ class RedemptionAgent:
         for item in final_products:
           return_products.append({
             "source": "wechat",
-            "appid": item["outAppId"],
-            "productId": item["outId"],
-            "productPromotionLink": item["link"]
+            "appid": item.get("outAppId",""),
+            "productId": item.get("outId",""),
+            "productPromotionLink": item.get("link","")
           })
       except Exception as e:
         _log.error(f"compose products after llm error : {str(e)}")
