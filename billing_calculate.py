@@ -92,7 +92,7 @@ def clean_previous_month_log(current_today):
   last_month_date = first_day_of_current_month - timedelta(days=3)
   last_month_str = last_month_date.strftime("%Y-%m")
   
-  log_pattern = os.path.join(CRON_LOG_DIR, f"ds_cron_{last_month_str}.log")
+  log_pattern = os.path.join(CRON_LOG_DIR, f"*{last_month_str}.log")
   print(f"🧹 开始在 [{CRON_LOG_DIR}] 目录下检查上月历史日志 (月份: {last_month_str})...")
   
   for log_file in glob.glob(log_pattern):
