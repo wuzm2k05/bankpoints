@@ -12,7 +12,7 @@ from core.voucher_order import VoucherOrder
 
 # --- 1. 定义工具集 (Tools) ---
 @tool
-def create_voucher_order(total_points: int, vouchers: List[Dict], state: Annotated[dict, InjectedState]) -> str:
+async def create_voucher_order(total_points: int, vouchers: List[Dict], state: Annotated[dict, InjectedState]) -> str:
   """
   创建工行立减金兑换订单。
   用户确认兑换方案后调用，一次提交完整订单。
@@ -41,15 +41,11 @@ def create_voucher_order(total_points: int, vouchers: List[Dict], state: Annotat
       "message": "兑换失败，原因：xxxx"
     }
   """
-  _log.debug(f"in create voucher: {state['user_id']}, {total_points}, {vouchers}")
-  return json.dumps({
-    "code": 0,
-    "message": "success",
-    "data": {
-      "pay_url": "https://www.pinlenet.com.cn/jifen/lijianjin/pay?orderCode=xxx",
-      "order_code": "2223234123423423423423"
-    }
-  }, ensure_ascii=False)
+  
+  _log.debug("creating voucher order...")
+  voucher_order = VoucherOrder()
+  return await voucher_order.create_voucher_order(state['user_id'],total_points,vouchers)
+  
 @tool
 def query_voucher_order_status(order_code: str) -> str:
   """

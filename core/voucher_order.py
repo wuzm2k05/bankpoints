@@ -1,4 +1,4 @@
-import hashlib,requests
+import hashlib,requests,httpx,json
 from langchain_core.tools import tool
 
 from loguru import logger as _log
@@ -6,10 +6,70 @@ from loguru import logger as _log
 from util.singleton import SingletonMeta
 import config.config as config
 
+from typing import Dict, List, Annotated
+
 class VoucherOrder(metaclass=SingletonMeta):
   def __init__(self):
     self.salt = config.get_voucher_order_salt()
-
+  
+  async def create_voucher_order(self, openid: str, total_points: int, vouchers: List[Dict]):
+    """
+    创建工行立减金兑换订单。
+    用户确认兑换方案后调用，一次提交完整订单。
+    
+    Args:
+      total_points: 本次消耗的i豆总数，例如 123200
+      vouchers: 兑换清单，例如：
+        [
+          {"amount": 100, "card_type": "debit",  "quantity": 1},
+          {"amount": 10,  "card_type": "debit",  "quantity": 2},
+          {"amount": 1,   "card_type": "credit", "quantity": 2}
+        ]
+    """
+    url = "https://www.pinlenet.com.cn/api/coupon/order/create"
+    
+    # 2. 映射拼装为渠道侧接口定义的标准报文（将 vouchers 映射回接口要的 coupons）
+    payload = {
+      "openid": openid,
+      "total_points": total_points,
+      "coupons": [
+        {
+          "amount": v.get("amount"),
+          "card_type": v.get("card_type"),
+          "quantity": v.get("quantity")
+        } for v in vouchers
+      ]
+    }
+    
+    _log.debug(f"🚀 发起立减金下单请求 -> {payload}")
+    
+    try:
+      # 3. 发起异步 POST 请求
+      async with httpx.AsyncClient() as client:
+        response = await client.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        
+      _log.debug(f"📥 下单接口原始响应: {result}")
+      
+      # 4. 根据返回契约，为大模型脱水输出直观的文本结果
+      if result.get("code") == 0:
+        data = result.get("data", {})
+        order_code = data.get("order_code")
+        pay_url = data.get("pay_url")
+        return f"🎉 订单创建成功！\n- 订单编码: {order_code}\n- 积分支付链接: {pay_url}\n请引导用户点击链接或识别二维码完成积分扣减支付。"
+      else:
+        return f"❌ 创建订单失败，渠道提示: {result.get('message', '未知错误')}"
+        
+    except Exception as e:
+      _log.error(f"下单接口异常: {str(e)}")
+      error_msg = f"❌ 抱歉，立减金下单通道暂时发生系统异常。原因: {str(e)}"
+      return json.dumps({
+        "code": 1,
+        "message": error_msg
+      }, ensure_ascii=False)
+          
+    
   def query_voucher_order_status(self, order_code: str) -> str:
     """
     查询工行立减金兑换订单的实时状态和发放详情。
