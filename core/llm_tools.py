@@ -1,8 +1,9 @@
 # 2 个空格对齐
 import json
-from typing import Dict, List
+from typing import Dict, List, Annotated
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 from loguru import logger as _log
 
 import config.config as config
@@ -11,7 +12,7 @@ from core.voucher_order import VoucherOrder
 
 # --- 1. 定义工具集 (Tools) ---
 @tool
-def create_voucher_order(total_points: int, vouchers: List[Dict]) -> str:
+def create_voucher_order(total_points: int, vouchers: List[Dict], state: Annotated[dict, InjectedState]) -> str:
   """
   创建工行立减金兑换订单。
   用户确认兑换方案后调用，一次提交完整订单。
@@ -40,6 +41,7 @@ def create_voucher_order(total_points: int, vouchers: List[Dict]) -> str:
       "message": "兑换失败，原因：xxxx"
     }
   """
+  _log.debug(f"in create voucher: {state['user_id']}, {total_points}, {vouchers}")
   return json.dumps({
     "code": 0,
     "message": "success",

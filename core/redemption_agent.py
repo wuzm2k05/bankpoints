@@ -7,6 +7,7 @@ from loguru import logger as _log
 
 # 异步组件导入
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage,RemoveMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
@@ -35,6 +36,7 @@ class AgentState(TypedDict):
   messages: Annotated[List[BaseMessage], operator.add]
   current_agent: str
   router_decision: Optional[RouterDecision]
+  user_id: Optional[str]
 
 class RedemptionAgent:
   def __init__(self,saver: SimpleRedisSaver):
@@ -217,7 +219,8 @@ class RedemptionAgent:
         _log.debug(f" -> [{curr}] 发射 tool_calls 意图，优先引流至工具链")
         return {
           "current_agent": curr,
-          "messages": [response] # 工具意图正常存入历史
+          "messages": [response], # 工具意图正常存入历史
+          "user_id": state.get("user_id") # 为什么我们要返回？防止原来老的历史没有此对象。
         }
       
       # 🌟【纯 JSON 契约解析验证】：直接验证标准格式
@@ -294,7 +297,8 @@ class RedemptionAgent:
       # 🌟 绝不在 messages 里返回 local_retry_context！
       # 我们只返回 perfect_response。在外部（历史记录和图状态）看来，这个 Agent 极其完美，
       # 永远是一次性就吐出了正确格式的消息，中间狼狈的纠错痕迹随风蒸发，绝对不落盘！
-      "messages": saved_messages if flow_status == "FINAL_RESPONSE" else []
+      "messages": saved_messages if flow_status == "FINAL_RESPONSE" else [],
+      "user_id": state.get("user_id")
     }
     
   def _central_conditional_router(self, state: AgentState):
@@ -395,7 +399,8 @@ class RedemptionAgent:
     # 💥【控制重置点】：每轮新开启对话前，将可能残留的决策缓冲区彻底抹掉，洗净图的数据状态
     inputs = {
       "messages": [HumanMessage(content=user_input)],
-      "router_decision": None
+      "router_decision": None,
+      "user_id": user_id
     }
     
     has_sent_final_answer = False
