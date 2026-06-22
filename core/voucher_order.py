@@ -40,27 +40,14 @@ class VoucherOrder(metaclass=SingletonMeta):
         } for v in vouchers
       ]
     }
-    
-    _log.debug(f"🚀 发起立减金下单请求 -> {payload}")
-    
+     
     try:
       # 3. 发起异步 POST 请求
       async with httpx.AsyncClient() as client:
         response = await client.post(url, json=payload, timeout=30)
         response.raise_for_status()
-        result = response.json()
-        
-      _log.debug(f"📥 下单接口原始响应: {result}")
-      
-      # 4. 根据返回契约，为大模型脱水输出直观的文本结果
-      if result.get("code") == 0:
-        data = result.get("data", {})
-        order_code = data.get("order_code")
-        pay_url = data.get("pay_url")
-        return f"🎉 订单创建成功！\n- 订单编码: {order_code}\n- 积分支付链接: {pay_url}\n请引导用户点击链接或识别二维码完成积分扣减支付。"
-      else:
-        return f"❌ 创建订单失败，渠道提示: {result.get('message', '未知错误')}"
-        
+        return response.text
+             
     except Exception as e:
       _log.error(f"下单接口异常: {str(e)}")
       error_msg = f"❌ 抱歉，立减金下单通道暂时发生系统异常。原因: {str(e)}"
@@ -69,7 +56,6 @@ class VoucherOrder(metaclass=SingletonMeta):
         "message": error_msg
       }, ensure_ascii=False)
           
-    
   def query_voucher_order_status(self, order_code: str) -> str:
     """
     查询工行立减金兑换订单的实时状态和发放详情。

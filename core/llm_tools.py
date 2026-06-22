@@ -42,7 +42,8 @@ async def create_voucher_order(total_points: int, vouchers: List[Dict], state: A
     }
   """
   
-  _log.debug("creating voucher order...")
+  _log.debug(f"creating voucher order... {total_points} {state['user_id']} {vouchers}")
+  #return '{"code":0,"message":"success","data":{"order_code":"0164ebe7698e4c76ab1bf17c35a0314e","pay_url":"https://qr.95516.com/01020001/wcqr?f=ICBCqr&X=5&T=3&P=13&I=37148139e896f1bea1b6e07dfeb131dc&N=ae6bcfa465ba4e0860d95cb6908823f3&L=d70a91731ec369ea076291fc385bf6e70eb45fc46606830f50c2bfc0743525d686d22cbc01a8385ef28f2a8a0f87bfdd"}}'
   voucher_order = VoucherOrder()
   return await voucher_order.create_voucher_order(state['user_id'],total_points,vouchers)
   
