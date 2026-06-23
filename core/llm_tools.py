@@ -41,12 +41,42 @@ async def create_voucher_order(total_points: int, vouchers: List[Dict], state: A
       "message": "兑换失败，原因：xxxx"
     }
   """
-  
-  _log.debug(f"creating voucher order... {total_points} {state['user_id']} {vouchers}")
-  #return '{"code":0,"message":"success","data":{"order_code":"0164ebe7698e4c76ab1bf17c35a0314e","pay_url":"https://qr.95516.com/01020001/wcqr?f=ICBCqr&X=5&T=3&P=13&I=37148139e896f1bea1b6e07dfeb131dc&N=ae6bcfa465ba4e0860d95cb6908823f3&L=d70a91731ec369ea076291fc385bf6e70eb45fc46606830f50c2bfc0743525d686d22cbc01a8385ef28f2a8a0f87bfdd"}}'
+  # ==================== 🛠️ 红线审计逻辑开始 ====================
+  total_amount = 0
+  batch_counts = {}  # 用于统计不同 (amount, card_type) 组合（即一个批次）的总张数
+
+  for v in vouchers:
+      amount = v.get("amount", 0)
+      quantity = v.get("quantity", 0)
+      card_type = v.get("card_type", "")
+      
+      # 累计总金额
+      total_amount += amount * quantity
+      
+      # 按 (金额, 卡类型) 维度作为批次进行统计
+      batch_key = (amount, card_type)
+      batch_counts[batch_key] = batch_counts.get(batch_key, 0) + quantity
+
+  # 1. 检查红线一：总立减金金额不超过 5000 元
+  if total_amount > 5000:
+      return json.dumps({
+          "code": 1,
+          "message": f"兑换失败，原因：单笔兑换总金额（当前 {total_amount} 元）已超过最大风控限制 5000 元，请重新计算并缩减方案。"
+      }, ensure_ascii=False)
+
+  # 2. 检查红线二：任何批次（相同金额且相同卡类型）不能超过 60 张
+  for (amount, card_type), count in batch_counts.items():
+      if count > 60:
+          card_type_cn = "借记卡" if card_type == "debit" else "信用卡" if card_type == "credit" else card_type
+          return json.dumps({
+              "code": 1,
+              "message": f"兑换失败，原因：单个批次不能超过 60 张。当前“{amount}元-{card_type_cn}”批次张数达到了 {count} 张，请重新计算方案，引导用户升级大面额或缩减数量。"
+          }, ensure_ascii=False)
+    # ==================== 🛠️ 红线审计逻辑结束 ====================
+
   voucher_order = VoucherOrder()
-  return await voucher_order.create_voucher_order(state['user_id'],total_points,vouchers)
-  
+  return await voucher_order.create_voucher_order(state['user_id'], total_points, vouchers)
+    
 @tool
 def query_voucher_order_status(order_code: str) -> str:
   """
