@@ -88,10 +88,10 @@ class RedemptionAgent:
     }
     
     self.agent_system_prompts = {
-      "router": router_agent_system_prompt, # 不绑定工具
-      "customer_service": customer_service_agent_system_prompt,
-      "points_exchange": points_exchange_agent_system_prompt,
-      "goods_exchange": goods_exchange_agent_system_prompt
+      "router": SystemMessage(content=router_agent_system_prompt),
+      "customer_service": SystemMessage(content=customer_service_agent_system_prompt),
+      "points_exchange": SystemMessage(content=points_exchange_agent_system_prompt),
+      "goods_exchange": SystemMessage(content=goods_exchange_agent_system_prompt)
     }
     
     self.runnable_agents = {
