@@ -52,7 +52,7 @@ class VoucherOrder(metaclass=SingletonMeta):
       _log.error(f"下单接口异常: {str(e)}")
       error_msg = f"❌ 抱歉，立减金下单通道暂时发生系统异常。原因: {str(e)}"
       return json.dumps({
-        "code": 1,
+        "code": 2,
         "message": error_msg
       }, ensure_ascii=False)
           
