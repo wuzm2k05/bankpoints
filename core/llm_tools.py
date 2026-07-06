@@ -44,11 +44,21 @@ async def create_voucher_order(total_points: int, vouchers: List[Dict], state: A
   # ==================== 🛠️ 红线审计逻辑开始 ====================
   total_amount = 0
   batch_counts = {}  # 用于统计不同 (amount, card_type) 组合（即一个批次）的总张数
-
+  ten_vouchers_nbr = 0
+  one_vouchers_nbr = 0
   for v in vouchers:
       amount = v.get("amount", 0)
       quantity = v.get("quantity", 0)
       card_type = v.get("card_type", "")
+      
+      if amount not in [1, 10, 100]:
+        # 理论上不会发生，但如果出现了，可以记录日志或提前返回错误
+        return json.dumps({"code": 1, "message": f"兑换失败：检测到不支持的面额 {amount} 元。"}, ensure_ascii=False)
+          
+      if amount == 10:
+        ten_vouchers_nbr += quantity
+      elif amount == 1:
+        one_vouchers_nbr += quantity
       
       # 累计总金额
       total_amount += amount * quantity
@@ -56,6 +66,19 @@ async def create_voucher_order(total_points: int, vouchers: List[Dict], state: A
       # 按 (金额, 卡类型) 维度作为批次进行统计
       batch_key = (amount, card_type)
       batch_counts[batch_key] = batch_counts.get(batch_key, 0) + quantity
+      
+  # 检查大额原则：10元的和1元的不能超过9张
+  if one_vouchers_nbr >= 10:
+    return json.dumps({
+      "code": 1,
+      "message": "兑换失败：1元面额张数累计已达10张或以上。系统规则要求每10张1元必须合并为1张10元，请重新调整方案。"
+    }, ensure_ascii=False)
+    
+  if ten_vouchers_nbr >= 10:
+    return json.dumps({
+      "code": 1,
+      "message": "兑换失败：10元面额张数累计已达10张或以上。系统规则要求每10张10元必须合并为1张100元，请重新调整方案。"
+    }, ensure_ascii=False)
 
   # 1. 检查红线一：总立减金金额不超过 5000 元
   if total_amount > 5000:
@@ -72,7 +95,7 @@ async def create_voucher_order(total_points: int, vouchers: List[Dict], state: A
               "code": 1,
               "message": f"兑换失败，原因：单个批次不能超过 60 张。当前“{amount}元-{card_type_cn}”批次张数达到了 {count} 张，请重新计算方案，引导用户升级大面额或缩减数量。"
           }, ensure_ascii=False)
-    # ==================== 🛠️ 红线审计逻辑结束 ====================
+  # ==================== 🛠️ 红线审计逻辑结束 ====================
 
   voucher_order = VoucherOrder()
   return await voucher_order.create_voucher_order(state['user_id'], total_points, vouchers)
