@@ -184,6 +184,43 @@ class RedemptionAgent:
     # 1. 顺藤摸瓜：看上一轮最后死在哪个房间
     last_node = state.get("current_agent", "router")
     return f"{last_node}_node"
+  
+  def _robust_json_parse(self,raw_content: str) -> dict:
+    """
+    【工业级鲁棒 JSON 解析器】
+    1. 清理各种 Markdown 代码块残留。
+    2. 处理全角、不间断空格污染。
+    3. 允许非严格控制字符（容忍原生换行）。
+    4. 动态防御：自动修正大模型偶尔将 reply 错塞进 router_decision 内部的结构性逻辑瑕疵。
+    """
+    # 1. 清理前后多余的空白或可能存在的 ```json ... ``` 标记
+    cleaned = raw_content.strip()
+    if cleaned.startswith("```json"):
+      cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+      cleaned = cleaned[3:]
+        
+    if cleaned.endswith("```"):
+      cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+    
+    # 2. 将一些恶心的全角/不间断空格（\xa0）替换为普通空格
+    cleaned = cleaned.replace('\xa0', ' ')
+    
+    # 3. 启用 strict=False，允许 JSON 字符串中包含控制字符（如未转义的真实换行等）
+    parsed = json.loads(cleaned, strict=False)
+    
+    # 🌟 4. 核心防御机制：一键纠正大模型手抖导致的 JSON 错位嵌套
+    if isinstance(parsed, dict):
+      router_decision = parsed.get("router_decision")
+      # 探测大模型是否犯糊涂把 reply 塞进了子字典中
+      if isinstance(router_decision, dict) and "reply" in router_decision:
+        # 如果外层正好漏掉了 reply，则从内部完美抽离、提到外层
+        if "reply" not in parsed or parsed["reply"] == "":
+          parsed["reply"] = router_decision.pop("reply")
+          _log.warning("🛡️ 触发代码层防御：成功将错嵌套在 router_decision 内部的 reply 字段抽离至外层。")
+          
+    return parsed
     
   async def _process_agent_node(self, state: AgentState):
     decision = state.get("router_decision") or {}
@@ -211,9 +248,9 @@ class RedemptionAgent:
     # 首次尝试获取大模型响应
     response = await self.runnable_agents[curr].ainvoke(base_messages)
     clean_res = response
-    _log.debug(f"原始响应: {response}")
     
     while retry_count <= MAX_RETRY:
+      _log.debug(f"原始响应: {response}")
       # 🌟 拦截优先：如果大模型突然想要调用工具，工具调用不参与 JSON 协议格式校验，直接放行
       if getattr(response, "tool_calls", None):
         _log.debug(f" -> [{curr}] 发射 tool_calls 意图，优先引流至工具链")
@@ -226,7 +263,8 @@ class RedemptionAgent:
       # 🌟【纯 JSON 契约解析验证】：直接验证标准格式
       try:
         clean_res = re.sub(r'```json\n?|\n?```', '', response.content).strip()
-        parsed_json = json.loads(clean_res)
+        #parsed_json = json.loads(clean_res)
+        parsed_json = self._robust_json_parse(clean_res)
         router_decision = parsed_json.get("router_decision", {"next_agent": "router", "flow_status": "FINAL_RESPONSE"})
         break
       except Exception as e:
