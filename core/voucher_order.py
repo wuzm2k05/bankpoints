@@ -32,13 +32,7 @@ class VoucherOrder(metaclass=SingletonMeta):
     payload = {
       "openid": openid,
       "total_points": total_points,
-      "coupons": [
-        {
-          "amount": v.get("amount"),
-          "card_type": v.get("card_type"),
-          "quantity": v.get("quantity")
-        } for v in vouchers
-      ]
+      "coupons": vouchers
     }
      
     try:

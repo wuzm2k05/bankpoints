@@ -96,9 +96,9 @@ class RedemptionAgent:
     
     self.runnable_agents = {
       "router": self.base_llm, # 不绑定工具
-      "customer_service": self.base_llm.bind_tools(self.agent_tools_config["customer_service"]),
-      "points_exchange": self.base_llm.bind_tools(self.agent_tools_config["points_exchange"]),
-      "goods_exchange": self.base_llm.bind_tools(self.agent_tools_config["goods_exchange"])
+      "customer_service": self.base_llm.bind_tools(self.agent_tools_config["customer_service"],strict=True),
+      "points_exchange": self.base_llm.bind_tools(self.agent_tools_config["points_exchange"],strict=True),
+      "goods_exchange": self.base_llm.bind_tools(self.agent_tools_config["goods_exchange"],strict=True)
     }
 
     #绑定工具并构建异步工作流

@@ -34,6 +34,12 @@ def get_model(model_name = None):
   _log.info("正在初始化 LLM 实例: {} (BaseURL: {})", 
             model_param["model_name"], 
             model_param["base_url"])
+  
+  extra_kwargs = {}
+  custom_kwargs = model_param.get("model_kwargs")
+  if custom_kwargs and isinstance(custom_kwargs, dict):
+    _log.info("🚀 成功读取到模型 {} 的专有配置参数: {}", model_name, custom_kwargs)
+    extra_kwargs["model_kwargs"] = custom_kwargs
 
   model_instance = ChatOpenAI(
     model=model_param["model_name"],
@@ -43,7 +49,8 @@ def get_model(model_name = None):
     # 增加超时配置，防止异步链路死锁
     timeout=60,
     # 开启流式支持
-    streaming=True 
+    streaming=True,
+    **extra_kwargs
   )
   
   _model_instances[model_name] = model_instance

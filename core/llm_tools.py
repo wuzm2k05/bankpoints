@@ -1,6 +1,7 @@
 # 2 个空格对齐
 import json
-from typing import Dict, List, Annotated
+from typing import Dict, List, Annotated, Any, Optional
+from pydantic import BaseModel, Field
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
@@ -10,22 +11,56 @@ import config.config as config
 from core.icbc_db import ICBCVectorDB
 from core.voucher_order import VoucherOrder
 
+class VoucherItem(BaseModel):
+  amount: int = Field(description="面额，例如 1, 10, 100")
+  card_type: str = Field(description="卡片类型，例如 '信用卡' 或 '借记卡'")
+  quantity: int = Field(description="兑换张数")
+
+class CreateVoucherOrderSchema(BaseModel):
+  total_points: int = Field(description="本次消耗的i豆总数，例如 123200")
+  vouchers: List[VoucherItem] = Field(description="兑换清单，每个元素必须包含 amount, card_type, quantity 三个属性")
+  state: Annotated[dict, InjectedState] = Field(default=None, exclude=True)
+
+  class Config:
+    extra = "forbid"
+
+class QueryVoucherOrderStatusSchema(BaseModel):
+  order_id: str = Field(description="需要查询进度的微信立减金兑换订单号,通常是一串由数字和字母组成的长字符串。例如：'e7164e61d584613960fd49e11ebfa68','400073730129000772605140951276'等")
+
+  class Config:
+    extra = "forbid"
+
+class QueryIcbcVoucherRulesSchema(BaseModel):
+  query: str = Field(description="用户的原始问题或业务核心关键词（例如：“换实名立减金还在吗”、“月额度超了怎么补发”、“e支付怎么开通”、“订单退款怎么算”）。禁止传入空白字符或无关代号")
+
+  class Config:
+    extra = "forbid"
+
+class GetPointsActivitiesSchema(BaseModel):
+  gap_points: int = Field(default=0, description="用户需要的i豆点数")
+
+  class Config:
+    extra = "forbid"
+
+class VectorSearchIcbcMallSchema(BaseModel):
+  query: str = Field(description="用户的原始需求、意图关键词或具体的商品名称")
+
+  class Config:
+    extra = "forbid"
+
+class VectorSearchWechatProductsSchema(BaseModel):
+  query: str = Field(description="用户的原始需求、意图关键词或具体的商品名称")
+
+  class Config:
+    extra = "forbid"
+
 # --- 1. 定义工具集 (Tools) ---
-@tool
-async def create_voucher_order(total_points: int, vouchers: List[Dict], state: Annotated[dict, InjectedState]) -> str:
+@tool(args_schema=CreateVoucherOrderSchema)
+async def create_voucher_order(total_points: int, vouchers: List[VoucherItem], state: Annotated[dict, InjectedState]) -> str:
   """
   创建工行立减金兑换订单。
   用户确认兑换方案后调用，一次提交完整订单。
-  
-  Args:
-    total_points: 本次消耗的i豆总数，例如 123200
-    vouchers: 兑换清单，例如：
-      [
-        {"amount": 100, "card_type": "debit",  "quantity": 1},
-        {"amount": 10,  "card_type": "debit",  "quantity": 2},
-        {"amount": 1,   "card_type": "credit", "quantity": 2}
-      ]
-  
+   
   Returns:
     JSON字符串，包含订单的支付链接。这个链接一次支付所有立减金的兑换。
     成功例子：{
@@ -42,39 +77,47 @@ async def create_voucher_order(total_points: int, vouchers: List[Dict], state: A
     }
   """
   # ==================== 🛠️ 红线审计逻辑开始 ====================
+  _log.debug(f"total_points: {total_points}, vouchers: {vouchers}")
   total_amount = 0
   batch_counts = {}  # 用于统计不同 (amount, card_type) 组合（即一个批次）的总张数
   ten_vouchers_nbr = 0
   one_vouchers_nbr = 0
+  vouchers_list = []
+  CARD_TYPE_MAP = {"信用卡": "credit", "借记卡": "debit"}
   for v in vouchers:
-      amount = v.get("amount", 0)
-      quantity = v.get("quantity", 0)
-      card_type = v.get("card_type", "")
-      
-      if amount not in [1, 10, 100]:
-        # 理论上不会发生，但如果出现了，可以记录日志或提前返回错误
-        return json.dumps({"code": 1, "message": f"兑换失败：检测到不支持的面额 {amount} 元。"}, ensure_ascii=False)
-          
-      if amount == 10:
-        ten_vouchers_nbr += quantity
-      elif amount == 1:
-        one_vouchers_nbr += quantity
-      
-      # 累计总金额
-      total_amount += amount * quantity
-      
-      # 按 (金额, 卡类型) 维度作为批次进行统计
-      batch_key = (amount, card_type)
-      batch_counts[batch_key] = batch_counts.get(batch_key, 0) + quantity
+    amount = v.amount
+    quantity = v.quantity
+    #card_type = v.card_type
+    card_type = CARD_TYPE_MAP.get(v.card_type, v.card_type)
+    vouchers_list.append({"amount": amount, "quantity": quantity, "card_type": card_type}) #下游函数使用
+    
+    if amount not in [1, 10, 100]:
+      # 理论上不会发生，但如果出现了，可以记录日志或提前返回错误
+      _log.debug(f"create_voucher_order: Error: 兑换失败：检测到不支持的面额 {amount} 元。 ")
+      return json.dumps({"code": 1, "message": f"兑换失败：检测到不支持的面额 {amount} 元。"}, ensure_ascii=False)
+        
+    if amount == 10:
+      ten_vouchers_nbr += quantity
+    elif amount == 1:
+      one_vouchers_nbr += quantity
+    
+    # 累计总金额
+    total_amount += amount * quantity
+    
+    # 按 (金额, 卡类型) 维度作为批次进行统计
+    batch_key = (amount, card_type)
+    batch_counts[batch_key] = batch_counts.get(batch_key, 0) + quantity
       
   # 检查大额原则：10元的和1元的不能超过9张
   if one_vouchers_nbr >= 10:
+    _log.debug(f"create_voucher_order: Error: 兑换失败：1元面额张数累计已达10张或以上。系统规则要求每10张1元必须合并为1张10元，请重新调整方案。 ")
     return json.dumps({
       "code": 1,
       "message": "兑换失败：1元面额张数累计已达10张或以上。系统规则要求每10张1元必须合并为1张10元，请重新调整方案。"
     }, ensure_ascii=False)
     
   if ten_vouchers_nbr >= 10:
+    _log.debug(f"create_voucher_order: Error: 兑换失败：10元面额张数累计已达10张或以上。系统规则要求每10张10元必须合并为1张100元，请重新调整方案。 ")
     return json.dumps({
       "code": 1,
       "message": "兑换失败：10元面额张数累计已达10张或以上。系统规则要求每10张10元必须合并为1张100元，请重新调整方案。"
@@ -98,15 +141,14 @@ async def create_voucher_order(total_points: int, vouchers: List[Dict], state: A
   # ==================== 🛠️ 红线审计逻辑结束 ====================
 
   voucher_order = VoucherOrder()
-  return await voucher_order.create_voucher_order(state['user_id'], total_points, vouchers)
+  return_result = await voucher_order.create_voucher_order(state['user_id'], total_points, vouchers_list)
+  _log.debug(f"create_voucher_order return: {return_result}")
+  return return_result
     
-@tool
-def query_voucher_order_status(order_code: str) -> str:
+@tool(args_schema=QueryVoucherOrderStatusSchema)
+def query_voucher_order_status(order_id: str) -> str:
   """
   查询工行立减金兑换订单的实时状态和发放详情。
-  
-  入参说明:
-    order_code (str): 订单编码，通常是一串由数字和字母组成的长字符串。例如："e7164e61d584613960fd49e11ebfa68","400073730129000772605140951276"等。
 
   返回内容示例：
     "查询成功。订单编码:2039dfee008d40549c6f5764ad21b28c;订单状态:立减金发放成功;兑换金额:3元;应发:3张1元;实发:3张1元;券状态:(168393866353已实扣,168396062864已实扣,168395241324已实扣)"
@@ -131,22 +173,19 @@ def query_voucher_order_status(order_code: str) -> str:
   调用要求：
     1. 拿到返回字符串后，请发挥你的语义理解能力，提取出‘订单状态’和‘兑换金额’等关键信息，并以友好的 Markdown 格式呈现给用户。对于订单的状态说明必须严格使用本接口的说明，绝对禁止自己添加任何解释性的文字，以免引起用户误解。
   """
-  _log.debug(f"正在查询订单状态: {order_code}")
+  _log.debug(f"正在查询订单状态: {order_id}")
   voucher_order = VoucherOrder()
-  result = voucher_order.query_voucher_order_status(order_code)
+  result = voucher_order.query_voucher_order_status(order_id)
   _log.debug(f"订单查询结果: {result}")
   return result
   
-@tool
+@tool(args_schema=VectorSearchWechatProductsSchema)
 async def vector_search_wechat_products(query: str):
   """
   【核心指令】调用此工具检索微信小店商城中的商品候选列表，此数据库为向量数据库。
   
   重要操作规范：
   1. 语义筛选：返回结果基于向量相似度，可能包含噪音。你必须作为审计员，剔除任何不符合用户意图的商品。
-
-  Args:
-    query (str): 用户的原始需求、意图关键词或具体的商品名称。
     
   Returns:
     list[dict]: 商品字典列表。每个字典包含: id,name, price, distance,outId,outAppId,link
@@ -178,16 +217,13 @@ async def vector_search_wechat_products(query: str):
   
   return ret
 
-@tool
+@tool(args_schema=VectorSearchIcbcMallSchema)
 async def vector_search_icbc_mall(query: str):
   """
   【核心指令】调用此工具检索工银i豆商城中的商品候选列表，此数据库为向量数据库。
   
   重要操作规范：
   1. 语义筛选：返回结果基于向量相似度，可能包含噪音。你必须作为审计员，剔除任何不符合用户意图的商品。
-
-  Args:
-    query (str): 用户的原始需求、意图关键词或具体的商品名称。
     
   Returns:
     list[dict]: 商品字典列表。每个字典包含: name, points, distance。
@@ -202,44 +238,7 @@ async def vector_search_icbc_mall(query: str):
   
   return results
 
-@tool
-async def search_jd_promotion(keyword: str):
-  """
-  在京东平台搜索指定商品的同款，并获取实时价格的商品链接。
-  
-  Args:
-    keyword (str): 要在京东比价的精确商品名称。
-    
-  Returns:
-    dict: 京东数据。包含 sku_name, price, promo_link, support_ecard 等。
-  """
-  _log.debug("search_jd_promotion tool: 搜索京东，关键词：{}", keyword)
-  
-  # 模拟异步 IO 操作（实际场景可换成 httpx 请求）
-  jd_database = [
-    {"name": "霸王茶姬代金券20元", "price": 20.0, "support_ecard": True},
-    {"name": "禧天龙保鲜盒两件套H80407", "price": 18.9, "support_ecard": False},
-    {"name": "特来电500元余额充值", "price": 500.0, "support_ecard": True},
-    {"name": "小米米家桌面暖风机", "price": 89.0, "support_ecard": False},
-    {"name": "雪碧 含糖雪碧 200mlx12罐", "price": 15.9, "support_ecard": False},
-    {"name": "奈雪的茶代金券10元", "price": 6.6, "support_ecard": True},
-    {"name": "华为Mate 60 Pro", "price": 5499.0, "support_ecard": True}
-  ]
-
-  match = next((item for item in jd_database if keyword in item["name"]), None)
-  
-  if match:
-    return {
-      "sku_name": f"京东自营-{match['name']}",
-      "price": match["price"],
-      "promo_link": f"https://u.jd.com/p?k={keyword}",
-      "source": "JD_MALL",
-      "support_ecard": match["support_ecard"]
-    }
-  
-  return None
-  
-@tool
+@tool(args_schema=GetPointsActivitiesSchema)
 async def get_points_activities(gap_points: int = 0):
   """
   获取工银i豆的积累攻略、官方活动详情及快速攒豆建议。
@@ -262,7 +261,7 @@ async def get_points_activities(gap_points: int = 0):
   
   return f"您的缺口较大（{gap_points}豆），建议关注：\n1. ‘工行月月刷’活动 \n2. 办理特定多倍i豆信用卡。"
 
-@tool
+@tool(args_schema=QueryIcbcVoucherRulesSchema)
 async def query_icbc_voucher_rules(query: str) -> str:
   """
   【业务工具：工行i豆与微信立减金综合规则及售后政策检索】
@@ -276,9 +275,6 @@ async def query_icbc_voucher_rules(query: str) -> str:
   3. 限额与风控：每月上限5000元或单批次60笔导致的“发放失败”、“数量不对”、“提取失败”及“当日早中晚人工补发”机制。
   4. 待发与延期：如何利用拼乐小程序购买“自行提取”来延长立减金有效期、待发金额如何提取。
   5. 售后与对账：实名认证变更券失效、购物退款（券过期不退）、e支付和i豆明细对账、如何截图利用微信识别文字功能复制订单号、人工客服热线（4006-705-057）及工作时间。
-  
-  参数规范：
-  - query (str): 用户的原始问题或业务核心关键词（例如：“换实名立减金还在吗”、“月额度超了怎么补发”、“e支付怎么开通”、“订单退款怎么算”）。禁止传入空白字符或无关代号。
 
   返回内容说明：
   返回格式为多条业务规则列表。每条规则包含：
