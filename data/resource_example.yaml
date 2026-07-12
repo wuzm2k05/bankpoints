@@ -440,13 +440,10 @@ models:
   
   deepseek:
     type: "deepseek"
-    model_name: "deepseek-v4-pro"
+    model_name: "deepseek-v4-flash"
     base_url: "https://api.deepseek.com/v1"
     api_key: "DEEPSEEK_API_KEY"
     temperature: 0
-    model_kwargs:
-      response_format:
-        type: "json_object"
   
   chatgpt:
     type: "openai"
