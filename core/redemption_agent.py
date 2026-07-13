@@ -67,8 +67,7 @@ class RedemptionAgent:
     
     self.slide_window = config_resource['agent_settings']['slide_window']
  
-    #获取支持异步的 LLM 实例
-    self.base_llm = model_factory.get_model()
+    #self.base_llm = model_factory.get_model()
 
     #初始化异步持久化层
     self.checkpointer = saver
@@ -110,12 +109,32 @@ class RedemptionAgent:
       "goods_exchange": SystemMessage(content=goods_exchange_agent_system_prompt)
     }
     
-    self.runnable_agents = {
-      "router": self.base_llm.bind_tools(self.agent_tools_config["router"],strict=True,tool_choice="required"), # 不绑定工具
-      "customer_service": self.base_llm.bind_tools(self.agent_tools_config["customer_service"],strict=True),
-      "points_exchange": self.base_llm.bind_tools(self.agent_tools_config["points_exchange"],strict=True),
-      "goods_exchange": self.base_llm.bind_tools(self.agent_tools_config["goods_exchange"],strict=True)
-    }
+    #self.runnable_agents = {
+    #  "router": self.base_llm.bind_tools(self.agent_tools_config["router"],strict=True,tool_choice="required"), 
+    #  "customer_service": self.base_llm.bind_tools(self.agent_tools_config["customer_service"],strict=True),
+    #  "points_exchange": self.base_llm.bind_tools(self.agent_tools_config["points_exchange"],strict=True),
+    #  "goods_exchange": self.base_llm.bind_tools(self.agent_tools_config["goods_exchange"],strict=True)
+    #}
+    
+    #获取支持异步的 LLM 实例
+    agent_model_mapping = config_resource.get("agent_models", {})
+    self.runnable_agents = {}
+    for agent_name, tools_list in self.agent_tools_config.items():
+      # 获取该 Agent 专属的模型名称
+      specific_model_name = agent_model_mapping.get(agent_name, None) 
+      
+      # 从工厂中获取对应的模型实例（单例模式，不会重复创建连接池）
+      agent_llm = model_factory.get_model(specific_model_name)
+      
+      # 针对网关和其他子系统的不同绑定策略
+      if agent_name == "router":
+          self.runnable_agents[agent_name] = agent_llm.bind_tools(
+              tools_list, strict=True, tool_choice="required"
+          )
+      else:
+          self.runnable_agents[agent_name] = agent_llm.bind_tools(
+              tools_list, strict=True
+          )
 
     #绑定工具并构建异步工作流
     self.tools_node = ToolNode(self.tools)

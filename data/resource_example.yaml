@@ -6,6 +6,12 @@ default_values:
 
   agent_settings:
     slide_window: 10
+  
+  agent_models:
+    router: "deepseek-flash"
+    customer_service: "deepseek-flash"
+    points_exchange: "deepseek-pro"
+    goods_exchange: "deepseek-pro"
 
   CUSTOMER_SERVICE_AGENT_CAPABILITY: |
    - 「customer_service」客服专家：负责解答用户关于工行i豆积攒攻略、i豆查询、立减金规则或者人工客服电话等问题，并根据订单号提供立减金兑换订单的实时进度查询。
@@ -197,6 +203,26 @@ models:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     api_key: "QWEN_API_KEY"
     temperature: 0
+  
+  deepseek-flash:
+    type: "deepseek"
+    model_name: "deepseek-v4-flash"
+    base_url: "https://api.deepseek.com/v1"
+    api_key: "DEEPSEEK_API_KEY"
+    temperature: 0
+    extra_body:
+      thinking:
+        type: disabled
+  
+  deepseek-pro:
+    type: "deepseek"
+    model_name: "deepseek-v4-pro"
+    base_url: "https://api.deepseek.com/v1"
+    api_key: "DEEPSEEK_API_KEY"
+    temperature: 0
+    extra_body:
+      thinking:
+        type: disabled
   
   deepseek:
     type: "deepseek"
