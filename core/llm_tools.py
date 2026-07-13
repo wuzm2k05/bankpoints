@@ -54,6 +54,10 @@ class VectorSearchWechatProductsSchema(BaseModel):
   class Config:
     extra = "forbid"
 
+class EmptyArgsSchema(BaseModel):
+  class Config:
+    extra = "forbid"  # 强制告诉大模型：这个工具绝对不能传入任何参数
+    
 # --- 1. 定义工具集 (Tools) ---
 @tool(args_schema=CreateVoucherOrderSchema)
 async def create_voucher_order(total_points: int, vouchers: List[VoucherItem], state: Annotated[dict, InjectedState]) -> str:
@@ -322,3 +326,26 @@ async def query_icbc_voucher_rules(query: str) -> str:
   except Exception as e:
     _log.error("查询立减金规则工具执行失败: {}", str(e))
     return f"【工具报错】: 内部执行异常，请尝试根据常识回答或引导人工。"
+  
+@tool(args_schema=EmptyArgsSchema)
+def route_to_customer_service() -> str:
+  """当用户需要基础咨询、查豆路径、查订单状态、找人工、攒豆攻略、立减金规则、寒暄打招呼时，触发此工具。"""
+  return "ROUTE_CUSTOMER_SERVICE"
+
+@tool(args_schema=EmptyArgsSchema)
+def route_to_points_exchange() -> str:
+  """当用户明确表达【纯粹想用i豆兑换成微信立减金/直兑券】的诉求，且不涉及具体商品比价时，触发此工具。"""
+  return "ROUTE_POINTS"
+
+@tool(args_schema=EmptyArgsSchema)
+def route_to_goods_exchange() -> str:
+  """当用户表达【商品购买、比价导购、想用立减金买商城东西、商城有什么大米】等明确的商品消费意图时，触发此工具。"""
+  return "ROUTE_GOODS"
+
+@tool(args_schema=EmptyArgsSchema)
+def route_back_to_router() -> str:
+  """
+  当你发现用户的输入/诉求超出了你的核心业务能力范围，或者用户转向了其他话题时，
+  请立刻触发此工具，将控制权交还给调度中心。
+  """
+  return "ROUTE_BACK"

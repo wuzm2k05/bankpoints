@@ -15,6 +15,7 @@ import config.config as config
 import config.resource as resource
 from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
+
 from core.llm_tools import (
   #get_ecard_voucher_rules, 
   vector_search_icbc_mall, 
@@ -23,7 +24,11 @@ from core.llm_tools import (
   query_icbc_voucher_rules,
   vector_search_wechat_products,
   query_voucher_order_status,
-  create_voucher_order
+  create_voucher_order,
+  route_back_to_router,
+  route_to_goods_exchange,
+  route_to_points_exchange,
+  route_to_customer_service
 )
 
 class RouterDecision(TypedDict):
@@ -35,7 +40,7 @@ class AgentState(TypedDict):
   # 这里的 operator.add 用于合并消息历史
   messages: Annotated[List[BaseMessage], operator.add]
   current_agent: str
-  router_decision: Optional[RouterDecision]
+  #router_decision: Optional[RouterDecision]
   user_id: Optional[str]
 
 class RedemptionAgent:
@@ -77,14 +82,25 @@ class RedemptionAgent:
       get_points_activities,
       query_icbc_voucher_rules,
       query_voucher_order_status,
-      create_voucher_order
+      create_voucher_order,
+      route_back_to_router,
+      route_to_customer_service,
+      route_to_goods_exchange,
+      route_to_points_exchange
+    ]
+    
+    self.route_tool_names = [
+      "route_back_to_router",
+      "route_to_customer_service",
+      "route_to_goods_exchange",
+      "route_to_points_exchange"
     ]
     
     self.agent_tools_config = {
-      "router": [], # 路由网关纯聊天/做决策，不需要任何工具
-      "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities],
-      "points_exchange": [create_voucher_order],
-      "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products,get_points_activities] # 商品导购也可以查询攒豆活动，作为辅助信息
+      "router": [route_to_points_exchange,route_to_goods_exchange,route_to_customer_service], # 路由网关
+      "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities,route_back_to_router],
+      "points_exchange": [create_voucher_order,route_back_to_router],
+      "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products,get_points_activities,route_back_to_router] # 商品导购也可以查询攒豆活动，作为辅助信息
     }
     
     self.agent_system_prompts = {
@@ -95,18 +111,15 @@ class RedemptionAgent:
     }
     
     self.runnable_agents = {
-      "router": self.base_llm, # 不绑定工具
+      "router": self.base_llm.bind_tools(self.agent_tools_config["router"],strict=True,tool_choice="required"), # 不绑定工具
       "customer_service": self.base_llm.bind_tools(self.agent_tools_config["customer_service"],strict=True),
       "points_exchange": self.base_llm.bind_tools(self.agent_tools_config["points_exchange"],strict=True),
       "goods_exchange": self.base_llm.bind_tools(self.agent_tools_config["goods_exchange"],strict=True)
     }
 
     #绑定工具并构建异步工作流
-    self.tool_node = ToolNode(self.tools)
-    self.app = self._build_workflow().compile(
-      checkpointer=self.checkpointer
-    )
-     
+    self.tools_node = ToolNode(self.tools)
+    self.app = self._build_workflow().compile(checkpointer=self.checkpointer)
     _log.info("RedemptionAgent 异步工作流编译完成")
     
   def _replace_prompt_variables(self, prompt_template: str) -> str:
@@ -120,19 +133,6 @@ class RedemptionAgent:
     capability_cs = config_resource["CUSTOMER_SERVICE_AGENT_CAPABILITY"]
     capability_points = config_resource["POINTS_EXCHAGNGE_AGENT_CAPABILITY"]
     capability_goods = config_resource["GOODS_EXCHAGE_AGENT_CAPABILITY"]
-    unified_json_spec = config_resource["UNIFIED_JSON_SPEC"]
-
-    # 2. 拓扑级组装【中转拦截规则】（先把原子能力注入到拦截器文本中）
-    goto_customer_service = config_resource["GOTO_CUSTOMER_SERVICE_RULE"]\
-        .replace("{CUSTOMER_SERVICE_AGENT_CAPABILITY}", capability_cs)
-        
-    goto_points_exchange = config_resource["GOTO_POINTS_EXCHANGE_RULE"]\
-        .replace("{POINTS_EXCHAGNGE_AGENT_CAPABILITY}", capability_points)
-        
-    goto_goods_exchange = config_resource["GOTO_GOODS_EXCHANGE_RULE"]\
-        .replace("{GOODS_EXCHAGE_AGENT_CAPABILITY}", capability_goods)
-        
-    goto_router = config_resource["GOTO_ROUTER_RULE"]
 
     # 3. 提取全局兑换率（硬编码适配 yaml 中的 {{voucher_rate}}，依据 points 房间 1100豆/元 铁律）
     try:
@@ -146,11 +146,6 @@ class RedemptionAgent:
         .replace("{CUSTOMER_SERVICE_AGENT_CAPABILITY}", capability_cs)\
         .replace("{POINTS_EXCHAGNGE_AGENT_CAPABILITY}", capability_points)\
         .replace("{GOODS_EXCHAGE_AGENT_CAPABILITY}", capability_goods)\
-        .replace("{GOTO_CUSTOMER_SERVICE_RULE}", goto_customer_service)\
-        .replace("{GOTO_POINTS_EXCHANGE_RULE}", goto_points_exchange)\
-        .replace("{GOTO_GOODS_EXCHANGE_RULE}", goto_goods_exchange)\
-        .replace("{GOTO_ROUTER_RULE}", goto_router)\
-        .replace("{UNIFIED_JSON_SPEC}", unified_json_spec)\
         .replace("{{voucher_rate}}", voucher_rate_str)
         
     return rendered_prompt
@@ -159,21 +154,33 @@ class RedemptionAgent:
     """构建 LangGraph 异步状态机"""
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("router_node", self._process_agent_node)
-    workflow.add_node("customer_service_node", self._process_agent_node)
-    workflow.add_node("points_exchange_node", self._process_agent_node)
-    workflow.add_node("goods_exchange_node", self._process_agent_node)
-    workflow.add_node("tools", self.tool_node)
+    # 1. 用标准的 async def 定义局部的单参数包装器，完美支持 await
+    async def router_node_fn(state):
+        return await self._process_agent_node(state, "router")
+
+    async def customer_service_node_fn(state):
+        return await self._process_agent_node(state, "customer_service")
+
+    async def points_exchange_node_fn(state):
+        return await self._process_agent_node(state, "points_exchange")
+
+    async def goods_exchange_node_fn(state):
+        return await self._process_agent_node(state, "goods_exchange")
+      
+    # 显式分离节点入口，确保 current_agent 状态同步精准
+    workflow.add_node("router_node", router_node_fn)
+    workflow.add_node("customer_service_node", customer_service_node_fn)
+    workflow.add_node("points_exchange_node", points_exchange_node_fn)
+    workflow.add_node("goods_exchange_node", goods_exchange_node_fn)
+    workflow.add_node("tools_node", self.tools_node)
     
-    #workflow.set_entry_point("router_node")
     workflow.add_conditional_edges("router_node", self._central_conditional_router)
     workflow.add_conditional_edges("customer_service_node", self._central_conditional_router)
     workflow.add_conditional_edges("points_exchange_node", self._central_conditional_router)
     workflow.add_conditional_edges("goods_exchange_node", self._central_conditional_router)
-    workflow.add_conditional_edges("tools", self._tool_return_router)
+    workflow.add_conditional_edges("tools_node", self._tool_return_router)
 
     workflow.set_conditional_entry_point(self._global_entry_router)
-
     return workflow
 
   def _global_entry_router(self, state: AgentState) -> str:
@@ -181,263 +188,150 @@ class RedemptionAgent:
     【全局条件大门】：根据历史状态快照（current_agent），
     决定是走“直达快车道”，还是走“前台网关研判”。
     """
-    # 1. 顺藤摸瓜：看上一轮最后死在哪个房间
+    #看上一轮最后死在哪个房间
     last_node = state.get("current_agent", "router")
     return f"{last_node}_node"
   
-  def _robust_json_parse(self,raw_content: str) -> dict:
-    """
-    【工业级鲁棒 JSON 解析器】
-    1. 清理各种 Markdown 代码块残留。
-    2. 处理全角、不间断空格污染。
-    3. 允许非严格控制字符（容忍原生换行）。
-    4. 动态防御：自动修正大模型偶尔将 reply 错塞进 router_decision 内部的结构性逻辑瑕疵。
-    """
-    # 1. 清理前后多余的空白或可能存在的 ```json ... ``` 标记
-    cleaned = raw_content.strip()
-    if cleaned.startswith("```json"):
-      cleaned = cleaned[7:]
-    elif cleaned.startswith("```"):
-      cleaned = cleaned[3:]
-        
-    if cleaned.endswith("```"):
-      cleaned = cleaned[:-3]
-    cleaned = cleaned.strip()
+  async def _process_agent_node(self, state: AgentState, current_agent_name: str):
+    _log.debug(f"--- [节点响应中: {current_agent_name}] ---")
     
-    # 2. 将一些恶心的全角/不间断空格（\xa0）替换为普通空格
-    cleaned = cleaned.replace('\xa0', ' ')
-    
-    # 3. 启用 strict=False，允许 JSON 字符串中包含控制字符（如未转义的真实换行等）
-    parsed = json.loads(cleaned, strict=False)
-    
-    # 🌟 4. 核心防御机制：一键纠正大模型手抖导致的 JSON 错位嵌套
-    if isinstance(parsed, dict):
-      router_decision = parsed.get("router_decision")
-      # 探测大模型是否犯糊涂把 reply 塞进了子字典中
-      if isinstance(router_decision, dict) and "reply" in router_decision:
-        # 如果外层正好漏掉了 reply，则从内部完美抽离、提到外层
-        if "reply" not in parsed or parsed["reply"] == "":
-          parsed["reply"] = router_decision.pop("reply")
-          _log.warning("🛡️ 触发代码层防御：成功将错嵌套在 router_decision 内部的 reply 字段抽离至外层。")
-          
-    return parsed
-    
-  async def _process_agent_node(self, state: AgentState):
-    decision = state.get("router_decision") or {}
-    curr = decision.get("next_agent") or state.get("current_agent") or "router"
-    _log.debug(f"--- [节点响应中: {curr}] ---")
-    
-    # 长对话滑动窗口裁剪，避免上下文无限膨胀
     raw_messages = state["messages"]
-    if len(raw_messages) > self.slide_window:
-      truncated_messages = raw_messages[-self.slide_window:]
-      _log.debug(f"针对 [{curr}] 触发长对话裁剪，历史从 {len(raw_messages)} 压至 {self.slide_window} 条")
-    else:
-      truncated_messages = raw_messages
+    _log.debug(f"raw_messages 原始快照: {raw_messages}")
     
-    # 1. 组装基础上下文：大模型专属系统提示词 + 历史消息
-    base_messages = [self.agent_system_prompts[curr]] + truncated_messages
-    _log.debug(f"送给大模型的消息: {base_messages}")
+    def get_msg_attr(msg, attr_name, default=None):
+      if hasattr(msg, attr_name):
+        return getattr(msg, attr_name)
+      elif isinstance(msg, dict):
+        return msg.get(attr_name, default)
+      return default
+
+    route_tool_names = self.route_tool_names
+
+    # ==================== 🧼 零残留内存清洗（完全基于工具名过滤） ====================
+    clean_messages = list(raw_messages)
     
-    MAX_RETRY = 1
-    retry_count = 0
-    
-    # 💥 关键点：用一个独立的局部列表来临时滚雪球积累重试上下文，绝不污染全局
-    local_retry_context = []
-    
-    # 首次尝试获取大模型响应
-    response = await self.runnable_agents[curr].ainvoke(base_messages)
-    clean_res = response
-    
-    while retry_count <= MAX_RETRY:
-      _log.debug(f"原始响应: {response}")
-      # 🌟 拦截优先：如果大模型突然想要调用工具，工具调用不参与 JSON 协议格式校验，直接放行
-      if getattr(response, "tool_calls", None):
-        _log.debug(f" -> [{curr}] 发射 tool_calls 意图，优先引流至工具链")
-        return {
-          "current_agent": curr,
-          "messages": [response], # 工具意图正常存入历史
-          "user_id": state.get("user_id") # 为什么我们要返回？防止原来老的历史没有此对象。
-        }
+    if clean_messages:
+      last_msg = clean_messages[-1]
+      tool_calls = get_msg_attr(last_msg, "tool_calls", None)
       
-      # 🌟【纯 JSON 契约解析验证】：直接验证标准格式
-      try:
-        clean_res = re.sub(r'```json\n?|\n?```', '', response.content).strip()
-        #parsed_json = json.loads(clean_res)
-        parsed_json = self._robust_json_parse(clean_res)
-        router_decision = parsed_json.get("router_decision", {"next_agent": "router", "flow_status": "FINAL_RESPONSE"})
-        break
-      except Exception as e:
-        retry_count += 1
-        if retry_count <= MAX_RETRY:
-          _log.warning(f"⚠️ [{curr}] 第 {retry_count} 次解析 JSON 契约失败，触发自我纠错...")
-          fix_hint = HumanMessage(content="【格式错误】你的上一次回复不符合 JSON Schema 规范！请移除任何 Markdown 标记（如 ```json），直接输出符合 Schema 的纯 JSON 字符串，不要包含任何解释性文字。")
-          local_retry_context.extend([response, fix_hint])
-          response = await self.runnable_agents[curr].ainvoke(base_messages + local_retry_context)
-        else:
-          _log.error(f"❌ [{curr}] 历经纠错后依旧失败，触发降级兜底。{e}")
+      # 🎯 触发清洗条件：如果最后一条消息是发起“路由工具调用”的 AIMessage
+      # 这意味着前一个房间触发了换房，由于条件边直接拦截跳转，这条 AIMessage 正处于新房历史的末尾
+      if tool_calls and isinstance(tool_calls, list):
+        if any(call.get("name") in route_tool_names for call in tool_calls):
+          _log.info("🧼 发现上一条是带有路由跳转意图的 AIMessage！启动逆向清理...")
+          
+          while clean_messages:
+            top_msg = clean_messages[-1]
+            top_type = get_msg_attr(top_msg, "type")
+            
+            # 撞到用户的 HumanMessage 刹车
+            if top_type == "human" or isinstance(top_msg, HumanMessage):
+              _log.debug("Found human base line. Stop scanning.")
+              break
+              
+            # 弹出夹在用户发言和当前房间之间的路由意图（完全在内存中抹除它的干扰）
+            clean_messages.pop()
+            _log.debug(f"🧹 局部清洗临时消息类型: {top_type}")
 
-    # 2. 判定最终结果
-    if retry_count > MAX_RETRY:
-      # 💥 极端情况：重试也完全失败了。我们人工造一个干净的兜底话术 AIMessage，替换掉大模型的乱码
-      fallback_text = "抱歉，系统处理时遇到了技术问题，请您尝试重新发送指令或联系客服人员。"
-      fake_json_contract = {
-        "router_decision": {
-          "next_agent": curr,               # 留在当前房间
-          "flow_status": "FINAL_RESPONSE"   # 交付给用户
-        },
-        "reply": fallback_text,
-        "products": []
-      }
+    # 🎯 【纵深安全防御层】：全面剥离 Redis 中可能由于过去历史残留的所有路由信息
+    safe_messages = []
+    for msg in clean_messages:
+      m_type = get_msg_attr(msg, "type", "")
       
-      perfect_response = AIMessage(content=json.dumps(fake_json_contract, ensure_ascii=False))
-      router_decision = fake_json_contract["router_decision"] 
-    else:
-      # 💥 正常/重试成功情况：将解析转换好的干净内容强行挂载到 response 消息中
-      # 关键秘密：我们用最后这个完美的 response，直接替换并代表整个重试过程！
-      perfect_response = AIMessage(content=clean_res)
-
-    # 3. 决定是否将消息存入 LangGraph 历史大池子
-    flow_status = router_decision.get("flow_status", "FINAL_RESPONSE") if isinstance(router_decision, dict) else "FINAL_RESPONSE"
-    saved_messages = [perfect_response] 
-    
-    # ToolMessage 垃圾回收 与 消息脱水
-    if flow_status == "FINAL_RESPONSE": 
-      #【倒序极速扫描】：从最新的一条消息开始往前瞅
-      for msg in reversed(state.get("messages",[])):
-        # 工业级防御：兼容从持久化层读出来的 dict 格式或标准 Message 对象
-        msg_type = getattr(msg, "type", None) or msg.get("type") if isinstance(msg, dict) else None
-        msg_id = getattr(msg, "id", None) or msg.get("id") if isinstance(msg, dict) else None
-        has_tool_calls = getattr(msg, "tool_calls", None) or msg.get("tool_calls") if isinstance(msg, dict) else None
-
-        # 情况 A：如果是工具返回的结果，物理删除
-        if msg_type == "tool" and msg_id:
-          saved_messages.append(RemoveMessage(id=msg_id))
-          _log.debug(f"🧹 已向状态机发射删除信号：ToolMessage (ID: {msg_id})")
-          
-        # 情况 B：如果是本轮大模型吐出的、带有 tool_calls 的中间态思考消息，也物理删除
-        elif msg_type == "ai" and has_tool_calls and msg_id:
-          saved_messages.append(RemoveMessage(id=msg_id))
-          _log.debug(f"🧹 已向状态机发射删除信号：带有 tool_calls 的 AIMessage (ID: {msg_id})")
-          
-        # 情况 C：💥【核心刹车点】一旦撞到了人类的发言，或者撞到了上一轮老AI发言
-        # 说明本轮产生的工具流碎片已经“全部全员靠岸并扫描完毕”了，立刻切断循环！
-        elif msg_type in ["human", "user"] or msg_type == "ai":
-          _log.debug(f"⚡ 倒序扫描本轮碎片完成，在消息 [{msg_type}] 处触发高性能刹车")
-          break
-          
-        else:
+      if m_type == "remove" or "remove" in str(m_type):
+        continue
+      
+      # 过滤包含路由工具调用的 AIMessage
+      tool_calls = get_msg_attr(msg, "tool_calls", None)
+      if tool_calls and isinstance(tool_calls, list):
+        if any(call.get("name") in route_tool_names for call in tool_calls):
+          _log.debug(f"🛡️ 过滤包含路由函数名的 AIMessage")
           continue
+          
+      # 过滤任何残留的路由 ToolMessage
+      m_name = get_msg_attr(msg, "name", "")
+      if m_type == "tool" and m_name in route_tool_names:
+        _log.debug(f"🛡️ 过滤路由函数名响应 ToolMessage: {m_name}")
+        continue
+        
+      safe_messages.append(msg)
+    # =========================================================================
     
-    return {
-      "current_agent": curr,
-      "router_decision": router_decision,
-      # 🌟 绝不在 messages 里返回 local_retry_context！
-      # 我们只返回 perfect_response。在外部（历史记录和图状态）看来，这个 Agent 极其完美，
-      # 永远是一次性就吐出了正确格式的消息，中间狼狈的纠错痕迹随风蒸发，绝对不落盘！
-      "messages": saved_messages if flow_status == "FINAL_RESPONSE" else [],
+    if len(safe_messages) > self.slide_window:
+      truncated_messages = safe_messages[-self.slide_window:]
+    else:
+      truncated_messages = safe_messages
+    
+    base_messages = [self.agent_system_prompts[current_agent_name]] + truncated_messages
+    _log.debug(f"送给llm的真正messages: {base_messages}")
+    
+    response = await self.runnable_agents[current_agent_name].ainvoke(base_messages)
+    _log.debug(f"原始响应：{response}")
+    
+    update_payload = {
+      "current_agent": current_agent_name,
+      "messages": [response],
       "user_id": state.get("user_id")
     }
+        
+    return update_payload
     
   def _central_conditional_router(self, state: AgentState):
-    """【全新升级】解耦的唯一中央条件路由分流控制核心"""
+    """中央条件路由：智能拦截并分流 Tool Call 意图"""
     last_msg = state["messages"][-1] if state["messages"] else None
     
-    # 最高优先截获：如果有未完成的工具意图，闭着眼送往 tools_node 节点
     if last_msg and hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-      return "tools"
+      return "tools_node"
       
-    decision = state.get("router_decision")
-    if not decision: 
-      return END
-      
-    curr_node = state.get("current_agent", "router")
-    next_node = decision.get("next_agent", "router")
-    flow_status = decision.get("flow_status", "FINAL_RESPONSE")
-    
-    _log.debug(f"🧭 路由研判 -> 驻留地: [{curr_node}] | 意图去往: [{next_node}] | 模式: [{flow_status}]")
-    
-    # 判定 1：大模型要求最终交付 (FINAL_RESPONSE)
-    # 无论 next_agent 填了谁，只要是 FINAL_RESPONSE，就代表本轮要对人类说话了，必须退出图，冻结本轮生命周期。
-    if flow_status == "FINAL_RESPONSE":
-      _log.debug(f"🏁 交付状态确立：在 [{curr_node}] 输出最终文本，成功闭环，挂起等待用户下一次发言。")
-      return END
-        
-    # 判定 2：大模型要求后台静默中转 (INTERIM)
-    if flow_status == "INTERIM":
-      # 如果大模型犯糊涂，指明了 INTERIM 却不切房间（自循环），强制退出防止死循环
-      if next_node == curr_node:
-        _log.warning(f"⚠️ 警告：Agent [{curr_node}] 触发了自循环的 INTERIM 中转，为防止后台死循环，强制切断并退出。")
-        return END
-          
-      target_node = "router_node" if next_node == "router" else f"{next_node}_node"
-      _log.debug(f"🔄 路由总线触发【后台无感连线】：[{curr_node}] -> [{target_node}]")
-      return target_node
-        
-    # 保底拦截
+    # 如果没有工具调用且产生了文本回复，代表需要直接输出交付给用户
     return END
   
   def _tool_return_router(self, state: AgentState):
-    """工具链处理结束后，顺着 current_agent 母体位置印记精准回归"""
+    """工具流转核心总线：依靠路由/退场工具的返回值完成智能切换"""
+    last_msg = state["messages"][-1] if state["messages"] else None
+    
+    if last_msg and isinstance(last_msg, ToolMessage):
+      # 检测路由分流工具的返回值
+      if last_msg.content == "ROUTE_CUSTOMER_SERVICE":
+        return "customer_service_node"
+      elif last_msg.content == "ROUTE_POINTS":
+        return "points_exchange_node"
+      elif last_msg.content == "ROUTE_GOODS":
+        return "goods_exchange_node"
+      elif last_msg.content == "ROUTE_BACK":
+        return "router_node"
+        
+    # 普通业务工具执行完毕，回归原母体房间继续研判
     return f"{state.get('current_agent', 'router')}_node"
   
   async def get_history(self, user_id: str) -> List[Dict]:
-    """
-    异步获取历史记录：
-    1. 严格过滤掉所有工具交互。
-    2. 解析 AI 消息中的 [PRODUCTS_JSON] 块并结构化返回。
-    """
     config_dict = {"configurable": {"thread_id": user_id}}
     state = await self.app.aget_state(config_dict)
     
     history = []
     if state and "messages" in state.values:
       for msg in state.values["messages"]:
-        # 获取基础属性
         content = getattr(msg, 'content', '') or (msg.get('content', '') if isinstance(msg, dict) else '')
         msg_type = getattr(msg, 'type', '') or (msg.get('type', '') if isinstance(msg, dict) else '')
         tool_calls = getattr(msg, 'tool_calls', None) or (msg.get('tool_calls') if isinstance(msg, dict) else None)
 
-        # --- 1. 基础过滤 ---
-        if not content or not str(content).strip() or msg_type == "tool" or tool_calls:
+        if not str(content).strip() or msg_type == "tool" or tool_calls:
           continue
 
-        # --- 2. 角色判定与内容清洗 ---
         if msg_type == "human":
           history.append({"role": "user", "content": content})
-          
         elif msg_type == "ai":
-          try:
-            # 为什么我们还要清洗？纯粹防御性的。。。
-            clean_res = re.sub(r'```json\n?|\n?```', '', str(content)).strip()
-            js_data = json.loads(clean_res) if clean_res else {}
-
-            if isinstance(js_data, dict) and "reply" in js_data:
-              clean_content = js_data.get("reply", "")
-              history.append({"role": "assistant", "content": clean_content})
-            else:
-              history.append({"role": "assistant", "content": str(content)})
-        
-          except Exception:
-            history.append({"role": "assistant", "content": str(content)})
+          # 移除可能存在的 PRODUCTS_JSON 后提取纯文本展示给前端历史
+          clean_content = re.sub(r'\[PRODUCTS_JSON\].*?\[/PRODUCTS_JSON\]', '', str(content), flags=re.DOTALL).strip()
+          if clean_content:
+            history.append({"role": "assistant", "content": clean_content})
               
     return history
   
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
-    """
-    异步流式对话接口：
-    1. 在 updates 模式下，节点执行完才会推送结果，因此 content 是完整的。
-    2. 使用正则从 content 中分离出隐藏的 [PRODUCTS_JSON] 块。
-    3. answer 字段仅保留纯文字，结构化数据放入 products 字段。
-    """
-    _log.debug("stream_chat 开始执行, seq: {}, user: {}", seq, user_id)
-    
     config_dict = {"configurable": {"thread_id": user_id}}
-    
-    # 💥【控制重置点】：每轮新开启对话前，将可能残留的决策缓冲区彻底抹掉，洗净图的数据状态
     inputs = {
       "messages": [HumanMessage(content=user_input)],
-      "router_decision": None,
       "user_id": user_id
     }
     
@@ -445,125 +339,76 @@ class RedemptionAgent:
     final_products = []
 
     try:
-      async for event in self.app.astream(
-        inputs, 
-        config=config_dict, 
-        stream_mode="updates"
-      ):
+      async for event in self.app.astream(inputs, config=config_dict, stream_mode="updates"):
         for node_name, output in event.items():
-          # --- 1. 处理 Trace (过程状态提示) ---
+          # 1. 动态链路状态 Trace 提示
           if with_trace:
             trace_msg = None
-            if node_name == "tools":
+            if node_name in ["tools_node"]:
               msgs = output.get("messages", [])
               if msgs and isinstance(msgs[-1], ToolMessage):
-                tool_msg = msgs[-1]
-                friendly_desc = self.tool_descriptions.get(
-                  tool_msg.name, 
-                  f"正在处理 {tool_msg.name}..."
-                )
-                trace_msg = {
-                  "seq": seq, "type": "chat", "userCode": user_id,
-                  "status": "success", "isTrace": True, "answer": friendly_desc
-                }
-            # 💥 扩展适配点：只要任何一个专业子 Agent 节点内部触发了 tool_calls 思考，立刻捕获发送思考 Trace
+                friendly_desc = self.tool_descriptions.get(msgs[-1].name, f"正在处理...")
+                trace_msg = {"seq": seq, "type": "chat", "userCode": user_id, "status": "success", "isTrace": True, "answer": friendly_desc}
             elif node_name in ["customer_service_node", "points_exchange_node", "goods_exchange_node"]:
               msgs = output.get("messages", [])
-              if msgs:
-                last_msg = msgs[-1]
-                if getattr(last_msg, 'tool_calls', None):
-                  trace_msg = {
-                    "seq": seq, "type": "chat", "userCode": user_id,
-                    "status": "success", "isTrace": True, "answer": "正在思考..."
-                  }
+              if msgs and getattr(msgs[-1], 'tool_calls', None):
+                trace_msg = {"seq": seq, "type": "chat", "userCode": user_id, "status": "success", "isTrace": True, "answer": "正在为您核实中..."}
             
             if trace_msg:
               await websocket.send_json(trace_msg)
 
-          # --- 2. 处理 Agent nodes 的最终文本输出 ---
-          if node_name in ["router_node", "customer_service_node", "points_exchange_node", "goods_exchange_node"]:
+          # 2. 最终回复流提取与隐藏 [PRODUCTS_JSON] 块拆解
+          if node_name in ["customer_service_node", "points_exchange_node", "goods_exchange_node"]:
             messages = output.get("messages", [])
             if not messages:
               continue
               
             last_msg = messages[-1]
-            decision = output.get("router_decision") or {}
-            flow_status = decision.get("flow_status", "FINAL_RESPONSE") 
-            
-            if last_msg.content and not getattr(last_msg, 'tool_calls', None) and flow_status == "FINAL_RESPONSE":
-              try:
-                # 为什么我们还要清洗？纯粹防御性的。。。
-                clean_res = re.sub(r'```json\n?|\n?```', '', str(last_msg.content)).strip()
-                contract_data = json.loads(clean_res) if clean_res else {}
-                
-                display_answer = contract_data.get("reply", "")
-                final_products = contract_data.get("products", [])
-                has_sent_final_answer = True
-                
-                _log.debug(f"通过契约成功解析回传文本: {display_answer}")
-                await websocket.send_json({
-                  "seq": seq,
-                  "type": "chat",
-                  "userCode": user_id,
-                  "status": "success",
-                  "isTrace": False,
-                  "answer": display_answer
-                })
-              except Exception as parse_err:
-                _log.error(f"stream_chat 实时解析契约 JSON 出现意外错误: {parse_err}")   
+            if last_msg.content and not getattr(last_msg, 'tool_calls', None):
+              raw_text = str(last_msg.content)
+              
+              # 正则剥离隐藏的商城特惠商品 JSON 数据协议
+              product_match = re.search(r'\[PRODUCTS_JSON\](.*?)\[/PRODUCTS_JSON\]', raw_text, re.DOTALL)
+              if product_match:
+                try:
+                  product_data = json.loads(product_match.group(1).strip())
+                  final_products = product_data.get("products", [])
+                except Exception:
+                  final_products = []
+                display_answer = re.sub(r'\[PRODUCTS_JSON\].*?\[/PRODUCTS_JSON\]', '', raw_text, flags=re.DOTALL).strip()
+              else:
+                display_answer = raw_text
+              
+              has_sent_final_answer = True
+              await websocket.send_json({
+                "seq": seq, "type": "chat", "userCode": user_id, "status": "success", "isTrace": False, "answer": display_answer
+              })
 
-      # --- 3. 发送结束信号 (Status: end) ---
+      # 3. 闭环交付商品卡片结构体与 End 状态信号
       return_products = []
-      try:  
-        for item in final_products:
-          return_products.append({
-            "source": "wechat",
-            "appid": item.get("outAppId",""),
-            "productId": item.get("outId",""),
-            "productPromotionLink": item.get("link","")
-          })
-      except Exception as e:
-        _log.error(f"compose products after llm error : {str(e)}")
-        return_products = []
+      for item in final_products:
+        return_products.append({
+          "source": "wechat",
+          "appid": item.get("outAppId", ""),
+          "productId": item.get("outId", ""),
+          "productPromotionLink": item.get("link", "")
+        })
       
-      msg = {
-        "seq": seq,
-        "type": "chat",
-        "userCode": user_id,
-        "status": "end",
-        "isTrace": False,
-        "answer": "" if has_sent_final_answer else "抱歉，暂时没有为您找到合适的方案。"
+      end_msg = {
+        "seq": seq, "type": "chat", "userCode": user_id, "status": "end", "isTrace": False,
+        "answer": "" if has_sent_final_answer else "好的，请问还有什么我可以帮您的？"
       }
       if return_products:
-        msg["products"] = return_products  
+        end_msg["products"] = return_products  
       
-      _log.debug(f"send msg back: {msg}")
-      await websocket.send_json(msg)
+      await websocket.send_json(end_msg)
 
     except Exception as e:
-      _log.error("流式对话链路异常: {}", e)
-      error_str = str(e)
-      if "400" in error_str and "tool_calls" in error_str:
-        _log.warning(f"检测到致命协议错误，正在重置用户 {user_id} 的历史记录...")
-        try:
-          await self.checkpointer.adelete(user_id)
-          user_hint = "系统状态已重置，请尝试重新发送您的请求。"
-        except Exception as redis_e:
-          _log.error(f"重置历史记录失败: {redis_e}")
-          user_hint = f"系统繁忙({error_str[:20]})，请稍后再试。"
-      else:
-        user_hint = f"请求处理异常，请稍后再试。"
-      
+      _log.error("流式对话网关异常: {}", e)
       await websocket.send_json({
-        "seq": seq,
-        "type": "chat",
-        "userCode": user_id,
-        "status": "fail",
-        "isTrace": False,
-        "errorCode": "500",
-        "errorMsg": user_hint
+        "seq": seq, "type": "chat", "userCode": user_id, "status": "fail", "isTrace": False, "errorCode": "500", "errorMsg": "请求处理异常，请稍后再试。"
       })
-  
+      
   async def close_resource(self):
     """清理资源，在 lifespan 的 yield 之后调用"""
     pass

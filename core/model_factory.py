@@ -1,4 +1,3 @@
-# 2 个空格对齐
 import os
 from langchain_openai import ChatOpenAI
 from config.resource import get_resource
@@ -35,11 +34,13 @@ def get_model(model_name = None):
             model_param["model_name"], 
             model_param["base_url"])
   
-  extra_kwargs = {}
-  custom_kwargs = model_param.get("model_kwargs")
-  if custom_kwargs and isinstance(custom_kwargs, dict):
-    _log.info("🚀 成功读取到模型 {} 的专有配置参数: {}", model_name, custom_kwargs)
-    extra_kwargs["model_kwargs"] = custom_kwargs
+  # 🎯 搜集 yaml 中所有属于 ChatOpenAI 官方支持的一级标准初始化参数
+  standard_kwargs = {}
+  
+  for key in ["extra_body", "response_format", "model_kwargs"]:
+    if key in model_param:
+      standard_kwargs[key] = model_param[key]
+      _log.info("🚀 成功加载配置参数 [{}]: {}", key, model_param[key])
 
   model_instance = ChatOpenAI(
     model=model_param["model_name"],
@@ -50,7 +51,7 @@ def get_model(model_name = None):
     timeout=60,
     # 开启流式支持
     streaming=True,
-    **extra_kwargs
+    **standard_kwargs  # 👈 优雅地以标准一级参数形式展开
   )
   
   _model_instances[model_name] = model_instance
