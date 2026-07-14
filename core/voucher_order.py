@@ -50,12 +50,51 @@ class VoucherOrder(metaclass=SingletonMeta):
         "message": error_msg
       }, ensure_ascii=False)
           
-  def query_voucher_order_status(self, order_code: str) -> str:
-    """
+  async def query_voucher_order_status(self, order_code: str) -> str:
+    r"""
     查询工行立减金兑换订单的实时状态和发放详情。
     
     入参说明:
       order_code (str): 订单编码，通常是一串由纯数字或者数字和字母组成的长字符串。
+    返回：
+      所有order_code都是一样即查询的order_code
+      成功
+      {
+          "code": 0,
+          "message": "success",
+          "data": [
+              {
+                  "order_code": "order_code",
+                  "status": "status",
+                  "total": "300元",
+                  "payable": "3张100元",
+                  "payed": "3张100元",
+                  "usage": "xxxx已使用,xxxx已使用,xxxx已使用",
+              }，
+              {
+                  "order_code": "order_code",
+                  "status": "status",
+                  "total": "30元",
+                  "payable": "3张10元",
+                  "payed": "3张10元",
+                  "usage": "xxxx已使用,xxxx已使用,xxxx已使用",
+              },
+              {
+                  "order_code": "order_code",
+                  "status": "status",
+                  "total": "3元",
+                  "payable": "3张1元",
+                  "payed": "3张1元",
+                  "usage": "xxxx已使用,xxxx已使用,xxxx已使用",
+              }        
+          ]
+      }
+
+      失败
+      {
+          "code": 1,
+          "message": "错误信息"
+      }
 
     """
     # 1. 构造 sign (内部逻辑，对 LLM 透明)
@@ -64,26 +103,29 @@ class VoucherOrder(metaclass=SingletonMeta):
     token = hashlib.md5(str_k.encode(encoding='UTF-8')).hexdigest()
 
     # 2. 构造请求 URL
-    url = "https://www.pinlenet.com.cn/jifen/lijianjin/order/status"
+    url = "https://www.pinlenet.com.cn/api/coupon/order/status"
     params = {
       "orderCode": order_code,
       "sign": token
     }
-
+    
     try:
-      # 3. 发起请求
-      response = requests.get(url, params=params, timeout=30)
-      response.raise_for_status()
-      
-      # 4. 返回结果给 LLM
-      result = response.json()
-      _log.debug(result)
-      if result.get("code") == 1:
-        return f"查询成功：{result.get('msg')}"
-      elif result.get("code") == 0:
-        return "查询结果：订单不存在，请核对订单号是否正确。"
-      else:
-        return f"查询失败：{result.get('msg', '未知错误')}"
+      async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(url, params=params)
         
+        if response.status_code != 200:
+          _log.error(f"接口请求失败，HTTP 状态码: {response.status_code}")
+          return json.dumps({"code": 1, "message": f"系统连接异常，HTTP 状态码: {response.status_code}"}, ensure_ascii=False)
+      
+        # 2. 获取接口原始 JSON 数据
+        res_data = response.json()
+        
+        # 3. 直接将字典序列化为 JSON 字符串返回给 Langchain 框架
+        # 框架会自动将其作为 ToolMessage 的 content 输送给大模型
+        return json.dumps(res_data, ensure_ascii=False)
+            
     except Exception as e:
-      return f"接口请求异常: {str(e)}"
+      _log.error(f"查询订单接口发生异常: {str(e)}")
+      return json.dumps({"code": 1, "message": "网络繁忙，订单状态查询暂不可用"}, ensure_ascii=False)  
+  
+  

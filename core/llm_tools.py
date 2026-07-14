@@ -25,7 +25,7 @@ class CreateVoucherOrderSchema(BaseModel):
     extra = "forbid"
 
 class QueryVoucherOrderStatusSchema(BaseModel):
-  order_id: str = Field(description="需要查询进度的微信立减金兑换订单号,通常是一串由数字和字母组成的长字符串。例如：'e7164e61d584613960fd49e11ebfa68','400073730129000772605140951276'等")
+  order_code: str = Field(description="需要查询进度的微信立减金兑换订单号,通常是一串由数字和字母组成的长字符串。例如：'e7164e61d584613960fd49e11ebfa68','400073730129000772605140951276'等")
 
   class Config:
     extra = "forbid"
@@ -150,24 +150,58 @@ async def create_voucher_order(total_points: int, vouchers: List[VoucherItem], s
   return return_result
     
 @tool(args_schema=QueryVoucherOrderStatusSchema)
-def query_voucher_order_status(order_id: str) -> str:
+async def query_voucher_order_status(order_code: str) -> str:
   """
   查询工行立减金兑换订单的实时状态和发放详情。
 
   返回内容示例：
-    "查询成功。订单编码:2039dfee008d40549c6f5764ad21b28c;订单状态:立减金发放成功;兑换金额:3元;应发:3张1元;实发:3张1元;券状态:(168393866353已实扣,168396062864已实扣,168395241324已实扣)"
-    "查询结果：订单不存在，请核对订单号是否正确。"
-    "查询失败：失败原因"
+    成功
+      {
+          "code": 0,
+          "message": "success",
+          "data": [
+              {
+                  "order_code": "order_code",
+                  "status": "status",
+                  "total": "300元",
+                  "payable": "3张100元",
+                  "payed": "3张100元",
+                  "usage": "xxxx已使用,xxxx已使用,xxxx已使用",
+              }，
+              {
+                  "order_code": "order_code",
+                  "status": "status",
+                  "total": "30元",
+                  "payable": "3张10元",
+                  "payed": "3张10元",
+                  "usage": "xxxx已使用,xxxx已使用,xxxx已使用",
+              },
+              {
+                  "order_code": "order_code",
+                  "status": "status",
+                  "total": "3元",
+                  "payable": "3张1元",
+                  "payed": "3张1元",
+                  "usage": "xxxx已使用,xxxx已使用,xxxx已使用",
+              }        
+          ]
+      }
+
+      失败
+      {
+          "code": 1,
+          "message": "错误信息"
+      }
     
     注意：
-      订单状态说明：
+      订单状态(status)说明：
       -  等待银行支付结果： 已下单等待用户支付，用户支付成功后银行支付系统会回调平台接口发送支付信息，该状态表示还没有收到银行支付系统的回调。
       - 订单已过期：用户下单后平台会在银行支付系统形成对应的“支付订单”，有效期为30分钟，用户需在30分钟内操作支付。订单已过期表明用户在支付单有效期内没有成功支付。
       - 立减金发放失败：用户成功支付，平台收到银行支付系统的回调，但发放微信立减金失败，后续平台会进行自动补发。
       - 立减金补发失败：平台自动补发也失败了。
-      -立减金发放成功：立减金发放成功，用户可在微信卡包查看。
+      - 立减金发放成功：立减金发放成功，用户可在微信卡包查看。
       
-      券状态说明：
+      券状态(usage)说明：
       - 未使用，立减金已发放但未使用
       - 已使用，立减金已发放且已使用
       - 已过期，立减金已发放但过了10天有效期
@@ -177,9 +211,9 @@ def query_voucher_order_status(order_id: str) -> str:
   调用要求：
     1. 拿到返回字符串后，请发挥你的语义理解能力，提取出‘订单状态’和‘兑换金额’等关键信息，并以友好的 Markdown 格式呈现给用户。对于订单的状态说明必须严格使用本接口的说明，绝对禁止自己添加任何解释性的文字，以免引起用户误解。
   """
-  _log.debug(f"正在查询订单状态: {order_id}")
+  _log.debug(f"正在查询订单状态: {order_code}")
   voucher_order = VoucherOrder()
-  result = voucher_order.query_voucher_order_status(order_id)
+  result = await voucher_order.query_voucher_order_status(order_code)
   _log.debug(f"订单查询结果: {result}")
   return result
   
