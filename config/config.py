@@ -156,6 +156,11 @@ def get_resource_file():
 def get_voucher_order_salt():
   return config.get('voucher_order', 'salt', fallback=os.environ.get('VOUCHER_ORDER_SALT',"")) 
 
+#################################################################################################
+### for voucher order
+def get_sqlite_db_path():
+  return config.get('sqlite_db', 'path', fallback=os.environ.get('SQLITE_DB_PATH',"data/sqlite_data.db")) 
+
 ### output all configrations
 def output_configs(log):
   log.info("=================configs=====================")

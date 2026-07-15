@@ -1,6 +1,7 @@
 import asyncio,sys
 from tools.icbc_voucher_to_db import VoucherKnowledgeBuilder
 from tools.icbc_mall_to_db import build_icbc_mall_db
+from tools.sqlite_db import add_data_to_sqlite,query_data_from_sqlite
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -29,6 +30,10 @@ async def main():
       return 
     build_icbc_mall_db()
     return
+  elif cmd == "add_sqlite":
+    await add_data_to_sqlite()
+  elif cmd == "query_sqlite":
+    await query_data_from_sqlite()
   else:
     print(f"Unknown command: {cmd}")
     print("Available commands: bvd (build voucher db), bmd (build mall db)")

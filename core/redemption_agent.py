@@ -16,6 +16,8 @@ import config.resource as resource
 from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
 
+from sqldb.sqlite_respository import SQLiteGoodsRepository
+
 from core.llm_tools import (
   #get_ecard_voucher_rules, 
   vector_search_icbc_mall, 
@@ -45,6 +47,7 @@ class AgentState(TypedDict):
 
 class RedemptionAgent:
   def __init__(self,saver: SimpleRedisSaver):
+    self.completion_keywords = ["成功", "已完成", "已为您", "兑换好", "查询到", "办理完毕", "还有其他"]
     # 预定义的友好描述映射
     # 2. 定义工具名称到友好描述的映射
     self.tool_descriptions = {
@@ -67,8 +70,6 @@ class RedemptionAgent:
     
     self.slide_window = config_resource['agent_settings']['slide_window']
  
-    #self.base_llm = model_factory.get_model()
-
     #初始化异步持久化层
     self.checkpointer = saver
     
@@ -108,13 +109,6 @@ class RedemptionAgent:
       "points_exchange": SystemMessage(content=points_exchange_agent_system_prompt),
       "goods_exchange": SystemMessage(content=goods_exchange_agent_system_prompt)
     }
-    
-    #self.runnable_agents = {
-    #  "router": self.base_llm.bind_tools(self.agent_tools_config["router"],strict=True,tool_choice="required"), 
-    #  "customer_service": self.base_llm.bind_tools(self.agent_tools_config["customer_service"],strict=True),
-    #  "points_exchange": self.base_llm.bind_tools(self.agent_tools_config["points_exchange"],strict=True),
-    #  "goods_exchange": self.base_llm.bind_tools(self.agent_tools_config["goods_exchange"],strict=True)
-    #}
     
     #获取支持异步的 LLM 实例
     agent_model_mapping = config_resource.get("agent_models", {})
@@ -347,6 +341,46 @@ class RedemptionAgent:
               
     return history
   
+  def add_recommendation_products(self,answer):
+    """
+    如果发现是结束语，就加上一些推荐商品，从sqlite中获取第一个。
+    注意answer是markdown格式的。
+    """
+    if not answer or not answer.strip():
+      return answer
+
+    # 1. 研判是否命中办理完成的结束语
+    is_completed = any(kw in answer for kw in self.completion_keywords)
+    
+    if is_completed:
+      _log.info("🎯 检测到回复中包含结束/办结关键词，尝试从 SQLite 提取推荐商品...")
+      recommend_text = ""
+      
+      try:
+        # 2. 实例化你的 SQLite 仓库（不传参，自动加载路径）
+        repo = SQLiteGoodsRepository()
+        
+        # 3. 直接调用你已有的同步类函数 _sync_query，只取 1 条记录
+        goods_list = repo._sync_query(product_id=None, limit=1)
+        
+        if goods_list:
+          item = goods_list[0]
+          desc = item.get("description") or desc
+          link = item.get("link") or link
+          _log.info(f"🎉 成功通过 Repository 类函数读取到推荐商品: {desc}")
+          recommend_text = (
+            f"\n\n---\n"
+            f"💡 **为您推荐**：如果您有闲置积分或想寻找超值优惠，"
+            f"可以看看我们为您精选的 [{desc}]({link})，点击链接即可直接前往体验哦！"
+          )
+          
+      except Exception as e:
+        _log.error(f"从 SQLite 提取推荐商品失败 (将使用默认兜底): {e}")
+      
+      return f"{answer}{recommend_text}"
+        
+    return answer
+    
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
     config_dict = {"configurable": {"thread_id": user_id}}
     inputs = {
@@ -396,7 +430,7 @@ class RedemptionAgent:
                   final_products = []
                 display_answer = re.sub(r'\[PRODUCTS_JSON\].*?\[/PRODUCTS_JSON\]', '', raw_text, flags=re.DOTALL).strip()
               else:
-                display_answer = raw_text
+                display_answer = self.add_recommendation_products(raw_text)
               
               has_sent_final_answer = True
               await websocket.send_json({
