@@ -430,7 +430,8 @@ class RedemptionAgent:
                   final_products = []
                 display_answer = re.sub(r'\[PRODUCTS_JSON\].*?\[/PRODUCTS_JSON\]', '', raw_text, flags=re.DOTALL).strip()
               else:
-                display_answer = self.add_recommendation_products(raw_text)
+                #display_answer = self.add_recommendation_products(raw_text)
+                display_answer = raw_text
               
               has_sent_final_answer = True
               await websocket.send_json({
