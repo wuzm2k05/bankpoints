@@ -7,6 +7,12 @@ default_values:
   agent_settings:
     slide_window: 10
   
+  user_suffix_config:
+    enabled: true
+    suffix_mapping:
+      "oMEdI66qPfxJ4sF3SV6pZjoB7It4": "\n\n---\n #微信小店://回力鞋奈鞋店/uy0tGjekwHcmkft \n [文字的商品链接](#微信小店://回力鞋奈鞋店/uy0tGjekwHcmkft)"
+    default_suffix: ""
+
   agent_models:
     router: "deepseek-flash"
     customer_service: "deepseek-flash"

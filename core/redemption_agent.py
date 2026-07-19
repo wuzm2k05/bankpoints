@@ -11,6 +11,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
+#from langgraph.checkpoint.memory import InMemorySaver
+
 import config.config as config
 import config.resource as resource
 from core import model_factory
@@ -62,6 +64,13 @@ class RedemptionAgent:
     
     config_resource = resource.get_resource()["default_values"]
     
+    # ========== 新增：加载用户后缀配置 ==========
+    self.user_suffix_config = config_resource.get("user_suffix_config", {})
+    self.suffix_mapping = self.user_suffix_config.get("suffix_mapping", {})
+    self.default_suffix = self.user_suffix_config.get("default_suffix", "")
+    self.suffix_enabled = self.user_suffix_config.get("enabled", True)
+    _log.info(f"用户后缀配置已加载，映射条目数: {len(self.suffix_mapping)}, 启用状态: {self.suffix_enabled}")
+    
     # 2. 动态拼接各个子 Agent 的专属提示词 (追加全局规范)
     router_agent_system_prompt = self._replace_prompt_variables(config_resource['ROUTER_AGENT_PROMPT'])
     customer_service_agent_system_prompt = self._replace_prompt_variables(config_resource['CUSTOMER_SERVICE_AGENT_PROMPT'])
@@ -72,6 +81,7 @@ class RedemptionAgent:
  
     #初始化异步持久化层
     self.checkpointer = saver
+    #self.checkpointer = InMemorySaver()
     
     #注册工具
     self.tools = [
@@ -149,17 +159,17 @@ class RedemptionAgent:
 
     # 3. 提取全局兑换率（硬编码适配 yaml 中的 {{voucher_rate}}，依据 points 房间 1100豆/元 铁律）
     try:
-        from config.config import get_icbc_voucher_rate
-        voucher_rate_str = str(get_icbc_voucher_rate())
+      from config.config import get_icbc_voucher_rate
+      voucher_rate_str = str(get_icbc_voucher_rate())
     except Exception:
-        voucher_rate_str = "1100"
+      voucher_rate_str = "1100"
 
     # 4. 执行全量点对点安全替换（避免 format 导致的数学公式 $P_{icbc}$ 报错）
     rendered_prompt = prompt_template\
-        .replace("{CUSTOMER_SERVICE_AGENT_CAPABILITY}", capability_cs)\
-        .replace("{POINTS_EXCHAGNGE_AGENT_CAPABILITY}", capability_points)\
-        .replace("{GOODS_EXCHAGE_AGENT_CAPABILITY}", capability_goods)\
-        .replace("{{voucher_rate}}", voucher_rate_str)
+      .replace("{CUSTOMER_SERVICE_AGENT_CAPABILITY}", capability_cs)\
+      .replace("{POINTS_EXCHAGNGE_AGENT_CAPABILITY}", capability_points)\
+      .replace("{GOODS_EXCHAGE_AGENT_CAPABILITY}", capability_goods)\
+      .replace("{{voucher_rate}}", voucher_rate_str)
         
     return rendered_prompt
   
@@ -169,16 +179,16 @@ class RedemptionAgent:
 
     # 1. 用标准的 async def 定义局部的单参数包装器，完美支持 await
     async def router_node_fn(state):
-        return await self._process_agent_node(state, "router")
+      return await self._process_agent_node(state, "router")
 
     async def customer_service_node_fn(state):
-        return await self._process_agent_node(state, "customer_service")
+      return await self._process_agent_node(state, "customer_service")
 
     async def points_exchange_node_fn(state):
-        return await self._process_agent_node(state, "points_exchange")
+      return await self._process_agent_node(state, "points_exchange")
 
     async def goods_exchange_node_fn(state):
-        return await self._process_agent_node(state, "goods_exchange")
+      return await self._process_agent_node(state, "goods_exchange")
       
     # 显式分离节点入口，确保 current_agent 状态同步精准
     workflow.add_node("router_node", router_node_fn)
@@ -381,6 +391,27 @@ class RedemptionAgent:
         
     return answer
     
+  # ========== 新增：获取用户后缀内容的方法 ==========
+  def get_user_suffix(self, user_id: str) -> str:
+    """
+    根据用户ID获取需要追加的后缀内容。
+    如果配置未启用或映射为空，返回空字符串。
+    """
+    if not self.suffix_enabled:
+      return ""
+    
+    if not self.suffix_mapping:
+      return ""
+    
+    # 精确匹配用户ID
+    suffix = self.suffix_mapping.get(user_id)
+    
+    # 如果未匹配到，使用默认后缀
+    if suffix is None:
+      suffix = self.default_suffix
+    
+    return suffix or ""
+    
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
     config_dict = {"configurable": {"thread_id": user_id}}
     inputs = {
@@ -432,6 +463,12 @@ class RedemptionAgent:
               else:
                 #display_answer = self.add_recommendation_products(raw_text)
                 display_answer = raw_text
+              
+              # ========== 新增：追加用户后缀 ==========
+              user_suffix = self.get_user_suffix(user_id)
+              if user_suffix:
+                display_answer = display_answer + user_suffix
+                _log.debug(f"为用户 {user_id} 追加了后缀内容")
               
               has_sent_final_answer = True
               await websocket.send_json({
