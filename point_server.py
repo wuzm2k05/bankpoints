@@ -45,18 +45,25 @@ async def token_management_server():
   try:
     host = config.get_tokenserver_host()
     port = config.get_token_server_port()
-   
-    # mTLS SSL 上下文配置 (保持不变)
-    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    #ssl_context.load_cert_chain("data/token_server.crt", "data/token_server.key")
-    ssl_context.load_cert_chain(config.get_token_certificate_chain_file(), config.get_token_private_key_file())
-    ca_path = config.get_token_ca_cert_file()
-    if not (ca_path and os.path.exists(ca_path)):
-      _log.error("未找到 mTLS CA 证书，客户端认证将被跳过，存在安全风险！请确保 {} 文件存在", ca_path)
-      return
     
-    ssl_context.load_verify_locations(cafile=ca_path)
-    ssl_context.verify_mode = ssl.CERT_REQUIRED
+    ssl_context = None
+    cert_path = config.get_token_certificate_chain_file()
+    key_path = config.get_token_private_key_file()
+    ca_path = config.get_token_ca_cert_file()
+
+    # 只有当证书和私钥文件均存在时，才配置 SSL/mTLS
+    if cert_path and key_path and os.path.exists(cert_path) and os.path.exists(key_path):
+      ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+      ssl_context.load_cert_chain(cert_path, key_path)
+      
+      if ca_path and os.path.exists(ca_path):
+        ssl_context.load_verify_locations(cafile=ca_path)
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        _log.info("Token Server 运行模式: mTLS (双向认证)")
+      else:
+        _log.warning("未找到 mTLS CA 证书，客户端认证将被跳过！")
+    else:
+      _log.info("Token Server 运行模式: Plain (明文模式，依赖前端 Nginx 卸载 SSL)")
   except Exception as e:
     _log.error(f"❌ Token Server 启动阶段崩溃: {e}", exc_info=True)
     return
@@ -113,14 +120,12 @@ async def token_management_server():
   async with server:
     await server.serve_forever()
     
-
 async def init_singleton_classes():
   """
   this function to init singleton class in multiple processes. 
   to avoid some multiple processes issues.
   """
   ICBCVectorDB()
-
 
 async def lifespan_init():
   """
