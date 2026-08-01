@@ -44,8 +44,6 @@ class AgentState(TypedDict):
   # 这里的 operator.add 用于合并消息历史
   messages: Annotated[List[BaseMessage], operator.add]
   current_agent: str
-  #router_decision: Optional[RouterDecision]
-  user_id: Optional[str]
 
 class RedemptionAgent:
   def __init__(self,saver: SimpleRedisSaver):
@@ -293,8 +291,7 @@ class RedemptionAgent:
     
     update_payload = {
       "current_agent": current_agent_name,
-      "messages": [response],
-      "user_id": state.get("user_id")
+      "messages": [response]
     }
         
     return update_payload
@@ -415,8 +412,7 @@ class RedemptionAgent:
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
     config_dict = {"configurable": {"thread_id": user_id}}
     inputs = {
-      "messages": [HumanMessage(content=user_input)],
-      "user_id": user_id
+      "messages": [HumanMessage(content=user_input)]
     }
     
     has_sent_final_answer = False

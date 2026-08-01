@@ -1,10 +1,10 @@
 # 2 个空格对齐
 import json
 from typing import Dict, List, Annotated, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
-from langchain_core.tools import tool
-from langgraph.prebuilt import InjectedState
+from langchain_core.tools import tool, InjectedToolArg
+from langchain.tools import ToolRuntime
 from loguru import logger as _log
 
 import config.config as config
@@ -19,10 +19,12 @@ class VoucherItem(BaseModel):
 class CreateVoucherOrderSchema(BaseModel):
   total_points: int = Field(description="本次消耗的i豆总数，例如 123200")
   vouchers: List[VoucherItem] = Field(description="兑换清单，每个元素必须包含 amount, card_type, quantity 三个属性")
-  state: Annotated[dict, InjectedState] = Field(default=None, exclude=True)
+  runtime: Annotated[ToolRuntime, InjectedToolArg]
 
-  class Config:
-    extra = "forbid"
+  model_config = ConfigDict(
+    extra="forbid",
+    arbitrary_types_allowed=True,
+  )
 
 class QueryVoucherOrderStatusSchema(BaseModel):
   order_code: str = Field(description="需要查询进度的微信立减金兑换订单号,通常是一串由数字和字母组成的长字符串。例如：'e7164e61d584613960fd49e11ebfa68','400073730129000772605140951276'等")
@@ -47,7 +49,7 @@ class VectorSearchIcbcMallSchema(BaseModel):
 
   class Config:
     extra = "forbid"
-
+      
 class VectorSearchWechatProductsSchema(BaseModel):
   query: str = Field(description="用户的原始需求、意图关键词或具体的商品名称")
 
@@ -60,7 +62,7 @@ class EmptyArgsSchema(BaseModel):
     
 # --- 1. 定义工具集 (Tools) ---
 @tool(args_schema=CreateVoucherOrderSchema)
-async def create_voucher_order(total_points: int, vouchers: List[VoucherItem], state: Annotated[dict, InjectedState]) -> str:
+async def create_voucher_order(total_points: int, vouchers: List[VoucherItem], runtime: Annotated[ToolRuntime, InjectedToolArg]) -> str:
   """
   创建工行立减金兑换订单。
   用户确认兑换方案后调用，一次提交完整订单。
@@ -143,9 +145,11 @@ async def create_voucher_order(total_points: int, vouchers: List[VoucherItem], s
               "message": f"兑换失败，原因：单个批次不能超过 60 张。当前“{amount}元-{card_type_cn}”批次张数达到了 {count} 张，请重新计算方案，引导用户升级大面额或缩减数量。"
           }, ensure_ascii=False)
   # ==================== 🛠️ 红线审计逻辑结束 ====================
+  user_id = runtime.config.get("configurable").get("thread_id")
+  _log.info(f"create_voucher_order: user_id={user_id}")
 
   voucher_order = VoucherOrder()
-  return_result = await voucher_order.create_voucher_order(state['user_id'], total_points, vouchers_list)
+  return_result = await voucher_order.create_voucher_order(user_id, total_points, vouchers_list)
   _log.debug(f"create_voucher_order return: {return_result}")
   return return_result
     

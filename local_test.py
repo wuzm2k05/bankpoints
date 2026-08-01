@@ -15,8 +15,13 @@ current_token: Optional[str] = None
 
 token_server_port = 8444
 
+
+### new server
+#host = "api.ninenode.com"
+#msg_server_port = 443
+
 ### local test configure
-host = "node09.cn"
+host = "127.0.0.1"
 msg_server_port = 8443
 
 ### online test configure
@@ -49,7 +54,8 @@ async def manage_token(cmd: str, token_to_cancel: str = None) -> Optional[str]:
     try:
       # 给连接加个 5 秒超时
       reader, writer = await asyncio.wait_for(
-          asyncio.open_connection(host, token_server_port, ssl=ssl_ctx), 
+          #asyncio.open_connection(host, token_server_port, ssl=ssl_ctx),
+          asyncio.open_connection(host, token_server_port), 
           timeout=5.0
       )
     except asyncio.TimeoutError:
@@ -83,6 +89,7 @@ async def manage_token(cmd: str, token_to_cancel: str = None) -> Optional[str]:
 
 # --- 2. WebSocket 响应处理 ---
 async def handle_response(data: dict):
+  print(data)
   seq = data.get("seq")
   msg_type = data.get("type")
   status = data.get("status")
@@ -137,6 +144,7 @@ async def listen_loop(ws: aiohttp.ClientWebSocketResponse):
 # --- 3. 主程序 ---
 async def start_client(user_code: str):
   global current_token
+  #ws_url = f"wss://{host}:{msg_server_port}/v1/chat"
   ws_url = f"wss://{host}:{msg_server_port}/v1/chat"
   
   ssl_ctx = ssl.create_default_context()
