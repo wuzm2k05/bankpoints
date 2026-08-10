@@ -1,4 +1,9 @@
-# 2 个空格对齐
+# OpenTelemetry 核心模块
+from opentelemetry import metrics
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
 import os
 import asyncio,json,ssl
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +31,36 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 state = {}
+
+def setup_opentelemetry():
+  """
+  初始化 OpenTelemetry Metrics 导出器 (通过环境变量注入 Collector 地址)
+  """
+  # 通过环境变量获取 Collector 地址（默认 fallback 到本地 4317 端口）
+  otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+  if not otel_endpoint:
+    _log.info("ℹ️ 未检测到 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量，已禁用 OpenTelemetry Metrics 收集")
+    return
+
+  try:
+    # 1. 创建基于 gRPC 的 OTLP 导出器
+    otlp_exporter = OTLPMetricExporter(
+        endpoint=otel_endpoint,
+        insecure=True,  # 无 TLS 证书时传 True
+    )
+
+    # 2. 创建定期导出器（例如每 5 秒推一次数据到 Collector）
+    reader = PeriodicExportingMetricReader(
+        otlp_exporter, export_interval_millis=5000
+    )
+
+    # 3. 注册全局 Provider
+    provider = MeterProvider(metric_readers=[reader])
+    metrics.set_meter_provider(provider)
+
+    _log.info("✅ OpenTelemetry Metrics 初始化成功，导出目标: {}", otel_endpoint)
+  except Exception as e:
+    _log.error("❌ OpenTelemetry 初始化失败: {}", e)
 
 async def start_single_services():
   """
@@ -131,6 +166,9 @@ async def lifespan_init():
   """
   初始化子进程资源
   """
+  # open telemetry
+  setup_opentelemetry()
+  
   # 1. 线程池配置
   max_workers = config.get_max_thread_workers()
   if int(max_workers) <= 0:

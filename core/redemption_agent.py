@@ -1,6 +1,7 @@
 # 2 个空格对齐
 import operator
 import json,re
+import time
 from typing import Annotated, List, TypedDict, Optional, Dict, Any
 from pydantic import BaseModel,Field
 from loguru import logger as _log
@@ -19,6 +20,38 @@ from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
 
 from sqldb.sqlite_respository import SQLiteGoodsRepository
+
+# Meter
+from opentelemetry import metrics
+
+meter = metrics.get_meter(__name__)
+
+# 1. 整体对话请求数和耗时
+chat_request_counter = meter.create_counter(
+  name="agent_chat_requests_total",
+  description="Total number of chat requests processed by RedemptionAgent",
+  unit="1"
+)
+
+chat_duration_histogram = meter.create_histogram(
+  name="agent_chat_request_duration_seconds",
+  description="Duration of chat requests processed by RedemptionAgent",
+  unit="s"
+)
+
+agent_node_execution_counter = meter.create_counter(
+  name="agent_node_execution_total",
+  description="Total number of node executions in RedemptionAgent",
+  unit="1"
+)
+
+tool_node_execution_counter = meter.create_counter(
+  name="tool_node_execution_total",
+  description="Total number of node executions in RedemptionAgent",
+  unit="1"
+)
+
+
 
 from core.llm_tools import (
   #get_ecard_voucher_rules, 
@@ -293,6 +326,9 @@ class RedemptionAgent:
       "current_agent": current_agent_name,
       "messages": [response]
     }
+    
+    # -- 增加metrics计数器
+    agent_node_execution_counter.add(1,{"agent_name": current_agent_name})
         
     return update_payload
     
@@ -311,6 +347,10 @@ class RedemptionAgent:
     last_msg = state["messages"][-1] if state["messages"] else None
     
     if last_msg and isinstance(last_msg, ToolMessage):
+      # 增加 metrics 计数器
+      tool_name = getattr(last_msg, 'name', 'unknown_tool')
+      tool_node_execution_counter.add(1, {"tool_name": tool_name})
+      
       # 检测路由分流工具的返回值
       if last_msg.content == "ROUTE_CUSTOMER_SERVICE":
         return "customer_service_node"
@@ -410,6 +450,8 @@ class RedemptionAgent:
     return suffix or ""
     
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
+    start_time = time.time()
+    
     config_dict = {"configurable": {"thread_id": user_id}}
     inputs = {
       "messages": [HumanMessage(content=user_input)]
@@ -489,8 +531,18 @@ class RedemptionAgent:
         end_msg["products"] = return_products  
       
       await websocket.send_json(end_msg)
+      
+      # metrics 计数器：记录整体请求耗时
+      duration = time.time() - start_time
+      chat_duration_histogram.record(duration, {"status": "success"})
+      chat_request_counter.add(1, {"status": "success"})
 
     except Exception as e:
+      # metrics 计数器：记录异常请求耗时
+      duration = time.time() - start_time
+      chat_duration_histogram.record(duration, {"status": "fail"})
+      chat_request_counter.add(1, {"status": "fail"})
+      
       _log.error("流式对话网关异常: {}", e)
       await websocket.send_json({
         "seq": seq, "type": "chat", "userCode": user_id, "status": "fail", "isTrace": False, "errorCode": "500", "errorMsg": "请求处理异常，请稍后再试。"
