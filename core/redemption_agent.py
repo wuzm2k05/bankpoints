@@ -51,8 +51,6 @@ tool_node_execution_counter = meter.create_counter(
   unit="1"
 )
 
-
-
 from core.llm_tools import (
   #get_ecard_voucher_rules, 
   vector_search_icbc_mall, 

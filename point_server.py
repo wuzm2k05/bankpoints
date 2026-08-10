@@ -45,13 +45,13 @@ def setup_opentelemetry():
   try:
     # 1. 创建基于 gRPC 的 OTLP 导出器
     otlp_exporter = OTLPMetricExporter(
-        endpoint=otel_endpoint,
-        insecure=True,  # 无 TLS 证书时传 True
+      endpoint=otel_endpoint,
+      insecure=True,  # 无 TLS 证书时传 True
     )
 
-    # 2. 创建定期导出器（例如每 5 秒推一次数据到 Collector）
+    # 2. 创建定期导出器（例如每 10 秒推一次数据到 Collector）
     reader = PeriodicExportingMetricReader(
-        otlp_exporter, export_interval_millis=5000
+      otlp_exporter, export_interval_millis=10000
     )
 
     # 3. 注册全局 Provider
