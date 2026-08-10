@@ -3,6 +3,7 @@ from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
 import os
 import asyncio,json,ssl
@@ -49,13 +50,18 @@ def setup_opentelemetry():
       insecure=True,  # 无 TLS 证书时传 True
     )
 
-    # 2. 创建定期导出器（例如每 10 秒推一次数据到 Collector）
+    #  创建定期导出器（例如每 10 秒推一次数据到 Collector）
     reader = PeriodicExportingMetricReader(
       otlp_exporter, export_interval_millis=10000
     )
+    
+    #  创建包含 Service Name 的 Resource
+    resource = Resource.create({
+      SERVICE_NAME: "redemption-agent-service"  # 这里改成你希望显示的服务名称
+    })
 
-    # 3. 注册全局 Provider
-    provider = MeterProvider(metric_readers=[reader])
+    # 注册全局 Provider
+    provider = MeterProvider(resource=resource, metric_readers=[reader])
     metrics.set_meter_provider(provider)
 
     _log.info("✅ OpenTelemetry Metrics 初始化成功，导出目标: {}", otel_endpoint)
