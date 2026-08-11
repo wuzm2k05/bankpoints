@@ -45,12 +45,6 @@ def setup_opentelemetry():
     return
 
   try:
-    # 1. 创建基于 gRPC 的 OTLP 导出器
-    otlp_exporter = OTLPMetricExporter(
-      endpoint=otel_endpoint,
-      insecure=True,  # 无 TLS 证书时传 True
-    )
-    
     # 💡 核心改动：设置增量推送（DELTA 模式）
     # 这样每个 Worker 只会推送这 10 秒内产生的新增请求数，Collector 拿到后会自动在内存里不断往上加
     delta_temporality = {
@@ -58,12 +52,18 @@ def setup_opentelemetry():
         Histogram: AggregationTemporality.DELTA,
         UpDownCounter: AggregationTemporality.DELTA
     }
-
+    
+    # 1. 创建基于 gRPC 的 OTLP 导出器
+    otlp_exporter = OTLPMetricExporter(
+      endpoint=otel_endpoint,
+      insecure=True,  # 无 TLS 证书时传 True
+      preferred_temporality=delta_temporality
+    )
+    
     #  创建定期导出器（例如每 10 秒推一次数据到 Collector）
     reader = PeriodicExportingMetricReader(
       otlp_exporter, 
-      export_interval_millis=10000,
-      preferred_temporality=delta_temporality
+      export_interval_millis=10000
     )
     
     #  创建包含 Service Name 的 Resource
