@@ -2,8 +2,9 @@
 from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader, AggregationTemporality
+from opentelemetry.sdk.metrics import Counter, Histogram, UpDownCounter # 导入指标类型
 
 import os
 import asyncio,json,ssl
@@ -49,10 +50,20 @@ def setup_opentelemetry():
       endpoint=otel_endpoint,
       insecure=True,  # 无 TLS 证书时传 True
     )
+    
+    # 💡 核心改动：设置增量推送（DELTA 模式）
+    # 这样每个 Worker 只会推送这 10 秒内产生的新增请求数，Collector 拿到后会自动在内存里不断往上加
+    delta_temporality = {
+        Counter: AggregationTemporality.DELTA,
+        Histogram: AggregationTemporality.DELTA,
+        UpDownCounter: AggregationTemporality.DELTA
+    }
 
     #  创建定期导出器（例如每 10 秒推一次数据到 Collector）
     reader = PeriodicExportingMetricReader(
-      otlp_exporter, export_interval_millis=10000
+      otlp_exporter, 
+      export_interval_millis=10000,
+      preferred_temporality=delta_temporality
     )
     
     #  创建包含 Service Name 的 Resource
