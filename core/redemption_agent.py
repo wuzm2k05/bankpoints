@@ -483,8 +483,9 @@ class RedemptionAgent:
                     
   def attach_extra_msg(self, messages: List[Any], node_name: str, display_answer: str, user_id: str) -> str:
     if self._should_attach_ad(messages, node_name):
-      display_answer = f"{display_answer}\n\n{self.ad_template}"
-      _log.debug(f"为节点 {node_name} 追加了广告模板内容")
+      formatted_ad = self.ad_template.format(user_id=user_id)
+      display_answer = f"{display_answer}\n\n{formatted_ad}"      
+      _log.debug(f"为节点 {node_name} 追加了广告模板内容: {display_answer}")
     
     display_answer = self.attach_user_suffix_if_needed(messages, node_name, display_answer, user_id)
     
