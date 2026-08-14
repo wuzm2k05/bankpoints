@@ -514,7 +514,7 @@ class RedemptionAgent:
   async def stream_chat(self, user_input: str, user_id: str, seq: str, websocket: Any, with_trace: bool = False):
     start_time = time.time()
     
-    config_dict = {"configurable": {"thread_id": user_id}}
+    config_dict = {"configurable": {"thread_id": user_id},"recursion_limit": 10}
     inputs = {
       "messages": [HumanMessage(content=user_input)]
     }
@@ -606,7 +606,7 @@ class RedemptionAgent:
       
       _log.error("流式对话网关异常: {}", e)
       await websocket.send_json({
-        "seq": seq, "type": "chat", "userCode": user_id, "status": "fail", "isTrace": False, "errorCode": "500", "errorMsg": "请求处理异常，请稍后再试。"
+        "seq": seq, "type": "chat", "userCode": user_id, "status": "fail", "isTrace": False, "errorCode": "500", "errorMsg": "系统繁忙没能正常响应您的请求，请稍后再试。"
       })
       
   async def close_resource(self):
