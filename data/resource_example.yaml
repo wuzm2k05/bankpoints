@@ -2,6 +2,13 @@
 active_model: "deepseek"
 
 default_values:
+  ad_push_config:
+    enabled: true
+    ad_template: |
+      ---
+      🐣 **【回馈福利】宜凤园富硒散养绿壳土鸡蛋超级代金券发放中！**
+      生态散养，华测富硒认证，品质严选，农场直发，口感鲜美！
+      👉 [点击领取代金券](https://www.pinlenet.com.cn/jifen/distri/13/create?openid=xxx&code=P901)
   temperature: 0.0
 
   agent_settings:

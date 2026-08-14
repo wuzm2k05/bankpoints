@@ -7,7 +7,7 @@ from pydantic import BaseModel,Field
 from loguru import logger as _log
 
 # 异步组件导入
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage,RemoveMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage,RemoveMessage, trim_messages
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -19,7 +19,7 @@ import config.resource as resource
 from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
 
-from sqldb.sqlite_respository import SQLiteGoodsRepository
+#from sqldb.sqlite_respository import SQLiteGoodsRepository
 
 # Meter
 from opentelemetry import metrics
@@ -78,7 +78,7 @@ class AgentState(TypedDict):
 
 class RedemptionAgent:
   def __init__(self,saver: SimpleRedisSaver):
-    self.completion_keywords = ["成功", "已完成", "已为您", "兑换好", "查询到", "办理完毕", "还有其他"]
+    #self.completion_keywords = ["成功", "已完成", "已为您", "兑换好", "查询到", "办理完毕", "还有其他", "还有什么"]
     # 预定义的友好描述映射
     # 2. 定义工具名称到友好描述的映射
     self.tool_descriptions = {
@@ -93,7 +93,12 @@ class RedemptionAgent:
     
     config_resource = resource.get_resource()["default_values"]
     
-    # ========== 新增：加载用户后缀配置 ==========
+    # ========== 加载广告推送配置 ==========
+    ad_config = config_resource.get("ad_push_config", {})
+    self.ad_enabled = ad_config.get("enabled", True)
+    self.ad_template = ad_config.get("ad_template", "")
+    
+    # ========== 加载用户后缀配置 ==========
     self.user_suffix_config = config_resource.get("user_suffix_config", {})
     self.suffix_mapping = self.user_suffix_config.get("suffix_mapping", {})
     self.default_suffix = self.user_suffix_config.get("default_suffix", "")
@@ -308,11 +313,22 @@ class RedemptionAgent:
         
       safe_messages.append(msg)
     # =========================================================================
+    truncated_messages = trim_messages(
+      safe_messages,
+      max_tokens=self.slide_window, # 可以按 token 数量截断，也可以按消息条数
+      strategy="last",               # 保留最新的消息
+      token_counter=len,             # 如果传 len，则 max_tokens 代表“保留的最长消息条数”；也可以传入 llm.get_num_tokens
+      allow_partial=False,           # 核心参数：不允许拆分成对的结构（如 AIMessage 与 ToolMessage）
+      end_on=("human", "tool"),      # 允许结尾的消息类型
+      start_on="human",              # 核心参数：截断后的第一条消息必须是用户发言，自动清理前面残留的孤立 ToolMessage/AIMessage
+    )
     
+    """
     if len(safe_messages) > self.slide_window:
       truncated_messages = safe_messages[-self.slide_window:]
     else:
       truncated_messages = safe_messages
+    """
     
     base_messages = [self.agent_system_prompts[current_agent_name]] + truncated_messages
     _log.debug(f"送给llm的真正messages: {base_messages}")
@@ -386,11 +402,8 @@ class RedemptionAgent:
               
     return history
   
+  """
   def add_recommendation_products(self,answer):
-    """
-    如果发现是结束语，就加上一些推荐商品，从sqlite中获取第一个。
-    注意answer是markdown格式的。
-    """
     if not answer or not answer.strip():
       return answer
 
@@ -425,6 +438,57 @@ class RedemptionAgent:
       return f"{answer}{recommend_text}"
         
     return answer
+  """
+  
+  def _should_attach_ad(self, messages: List[Any], node_name: str) -> bool:
+    """
+    统一在此处判断是否符合广告推送条件
+    """
+    if not self.ad_enabled or not self.ad_template or not messages:
+      return False
+
+    msg_type = None
+    tool_name = None
+    prev_msg = messages[-2]
+    if len(messages) >= 2:
+      msg_type = getattr(prev_msg, "type", "") or (prev_msg.get("type") if isinstance(prev_msg, dict) else "")
+      tool_name = getattr(prev_msg, "name", "") or (prev_msg.get("name") if isinstance(prev_msg, dict) else "")
+
+    # -------------------------------------------------------------
+    # 场景 A：立减金下单完成（检查倒数第二条消息 messages[-2] 是否为下单工具返回）
+    # -------------------------------------------------------------
+    if node_name == "points_exchange_node":    
+      if msg_type == "tool" and tool_name == "create_voucher_order":
+        _log.info("🎯 [广告推送] 倒数第二条消息匹配到 create_voucher_order 的 ToolMessage，立减金下单成功，准备推送广告！")
+        return True
+
+    # -------------------------------------------------------------
+    # 场景 B：客服/商品咨询服务办结（检查文本是否命中结束关键词）
+    # -------------------------------------------------------------
+    if node_name in ["customer_service_node"]:
+      if msg_type == "tool" and tool_name not in ("route_back_to_router","route_to_goods_exchange","route_to_points_exchange","route_to_customer_service"):
+        # we have tool call previous msg, so add ad here
+        _log.info(f"🎯 [广告推送] 节点 {node_name} 命中办结关键词，准备推送广告！")
+        return True
+
+    return False
+  
+  def attach_user_suffix_if_needed(self, messages: List[Any], node_name: str, display_answer: str, user_id: str) -> str:
+    user_suffix = self.get_user_suffix(user_id)
+    if user_suffix:
+      display_answer = f"{display_answer}\n\n{user_suffix}"
+      _log.debug(f"为用户 {user_id} 追加了后缀内容")
+    
+    return display_answer
+                    
+  def attach_extra_msg(self, messages: List[Any], node_name: str, display_answer: str, user_id: str) -> str:
+    if self._should_attach_ad(messages, node_name):
+      display_answer = f"{display_answer}\n\n{self.ad_template}"
+      _log.debug(f"为节点 {node_name} 追加了广告模板内容")
+    
+    display_answer = self.attach_user_suffix_if_needed(messages, node_name, display_answer, user_id)
+    
+    return display_answer
     
   # ========== 新增：获取用户后缀内容的方法 ==========
   def get_user_suffix(self, user_id: str) -> str:
@@ -461,7 +525,7 @@ class RedemptionAgent:
     try:
       async for event in self.app.astream(inputs, config=config_dict, stream_mode="updates"):
         for node_name, output in event.items():
-          # 1. 动态链路状态 Trace 提示
+          # 动态链路状态 Trace 提示
           if with_trace:
             trace_msg = None
             if node_name in ["tools_node"]:
@@ -477,7 +541,7 @@ class RedemptionAgent:
             if trace_msg:
               await websocket.send_json(trace_msg)
 
-          # 2. 最终回复流提取与隐藏 [PRODUCTS_JSON] 块拆解
+          # 最终回复流提取与隐藏 [PRODUCTS_JSON] 块拆解
           if node_name in ["customer_service_node", "points_exchange_node", "goods_exchange_node"]:
             messages = output.get("messages", [])
             if not messages:
@@ -500,11 +564,10 @@ class RedemptionAgent:
                 #display_answer = self.add_recommendation_products(raw_text)
                 display_answer = raw_text
               
-              # ========== 新增：追加用户后缀 ==========
-              user_suffix = self.get_user_suffix(user_id)
-              if user_suffix:
-                display_answer = display_answer + user_suffix
-                _log.debug(f"为用户 {user_id} 追加了后缀内容")
+              # ========== 增加额外内容 ==========
+              full_state = await self.app.aget_state(config_dict)
+              full_messages = full_state.values.get("messages",[]) if full_state and full_state.values else messages
+              display_answer = self.attach_extra_msg(full_messages, node_name, display_answer,user_id)
               
               has_sent_final_answer = True
               await websocket.send_json({
