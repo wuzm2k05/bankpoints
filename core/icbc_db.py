@@ -53,6 +53,7 @@ class ICBCVectorDB(metaclass=SingletonMeta):
     self.product_collection = self.client.get_or_create_collection(name="icbc_products")
     self.strategy_collection = self.client.get_or_create_collection(name="icbc_strategies")
     self.voucher_collection = self.client.get_or_create_collection(name="icbc_standing_vouchers")
+    self.egg_collection = self.client.get_or_create_collection(name="yifengyuan_egg_knowledge")
     
     # 新增：微信达人商品 collection
     self.wechat_collection = self.client.get_or_create_collection(name="wechat_talent_products")
@@ -363,7 +364,7 @@ class ICBCVectorDB(metaclass=SingletonMeta):
       embeddings = self.embeddings.embed_documents(documents)
       self.voucher_collection.add(
         ids=ids, 
-        embeddings=embeddings, 
+        embeddings=embeddings,
         documents=documents, 
         metadatas=metadatas
       )
@@ -383,3 +384,64 @@ class ICBCVectorDB(metaclass=SingletonMeta):
 
     self.add_voucher_knowledge(qa_list)
     _log.success(f"全量导入完成")
+    
+  def build_egg_knowledge(self, docs: List[Dict[str, Any]]):
+    """
+    全量导入宜凤园鸡蛋知识库
+    docs 示例: [
+      {
+        "id": "origin_01",
+        "content": "【产地环境】宜凤园土鸡蛋产自湖北宜昌北纬30°生态山林...",
+        "category": "origin",
+        "topic": "产地与养殖环境"
+      },
+      ...
+    ]
+    """
+    try:
+      self.client.delete_collection(name="yifengyuan_egg_knowledge")
+      self.egg_collection = self.client.create_collection(name="yifengyuan_egg_knowledge")
+      _log.info("已清空鸡蛋知识库，准备全量导入...")
+    except Exception:
+      self.egg_collection = self.client.get_or_create_collection(name="yifengyuan_egg_knowledge")
+
+    ids = [d.get("id", f"egg_{i}") for i, d in enumerate(docs)]
+    documents = [d["content"] for d in docs]
+    metadatas = [
+      {
+        "category": d.get("category", ""),
+        "topic": d.get("topic", "")
+      } for d in docs
+    ]
+
+    embeddings = self.embeddings.embed_documents(documents)
+    self.egg_collection.add(
+      ids=ids,
+      embeddings=embeddings,
+      documents=documents,
+      metadatas=metadatas
+    )
+    _log.success(f"宜凤园鸡蛋知识库导入完成，共计 {len(docs)} 条知识项")
+
+  def search_egg_info(self, query: str, limit: int = 2) -> List[Dict[str, Any]]:
+    """同步检索鸡蛋知识库"""
+    _log.debug("正在搜索宜凤园鸡蛋知识库: {}", query)
+    query_vector = self.embeddings.embed_query(query)
+    results = self.egg_collection.query(
+      query_embeddings=[query_vector],
+      n_results=limit
+    )
+    output = []
+    if results and results.get("documents") and len(results["documents"][0]) > 0:
+      for i in range(len(results["documents"][0])):
+        output.append({
+          "content": results["documents"][0][i],
+          "distance": results["distances"][0][i],
+          "metadata": results["metadatas"][0][i] if results.get("metadatas") else {}
+        })
+    return output
+
+  async def asearch_egg_info(self, query: str, limit: int = 2) -> List[Dict[str, Any]]:
+    """异步检索鸡蛋知识库"""
+    return await asyncio.to_thread(self.search_egg_info, query, limit)
+

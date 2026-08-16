@@ -2,6 +2,7 @@ import asyncio,sys
 from tools.icbc_voucher_to_db import VoucherKnowledgeBuilder
 from tools.icbc_mall_to_db import build_icbc_mall_db
 from tools.sqlite_db import add_data_to_sqlite,query_data_from_sqlite
+from tools.icbc_egg_db import build_egg_db,search_egg_db
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -34,6 +35,10 @@ async def main():
     await add_data_to_sqlite()
   elif cmd == "query_sqlite":
     await query_data_from_sqlite()
+  elif cmd == "egg_build":
+    build_egg_db()
+  elif cmd == "egg_search":
+    search_egg_db(sys.argv[2])
   else:
     print(f"Unknown command: {cmd}")
     print("Available commands: bvd (build voucher db), bmd (build mall db)")

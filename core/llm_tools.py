@@ -9,7 +9,7 @@ from loguru import logger as _log
 
 import config.config as config
 from core.icbc_db import ICBCVectorDB
-from core.voucher_order import VoucherOrder
+from core.voucher_order import VoucherOrder, pinle_issue_egg_voucher
 
 class VoucherItem(BaseModel):
   amount: int = Field(description="面额，例如 1, 10, 100")
@@ -59,8 +59,66 @@ class VectorSearchWechatProductsSchema(BaseModel):
 class EmptyArgsSchema(BaseModel):
   class Config:
     extra = "forbid"  # 强制告诉大模型：这个工具绝对不能传入任何参数
+
+class IssueEggVoucherSchema(BaseModel):
+  runtime: Annotated[ToolRuntime, InjectedToolArg]
+
+  model_config = ConfigDict(
+    extra="forbid",
+    arbitrary_types_allowed=True,
+  )
+
+class QueryEggInfoSchema(BaseModel):
+  query: str = Field(description="用户关于鸡蛋的疑问或关键词，例如：'产地在哪里'、'孕妇能不能吃'、'顺丰发货吗'、'口感怎么样'等")
+
+  class Config:
+    extra = "forbid"
+
+@tool(args_schema=QueryEggInfoSchema)
+async def query_egg_info(query: str) -> str:
+  """
+  查询宜凤园土鸡蛋的产地环境、营养成分、安全认证、发货包装及口感吃法等知识库信息。
+  当用户询问关于宜凤园鸡蛋的任何具体问题时调用。
+  """
+  try:
+    _log.info("query_egg_info tool: 执行鸡蛋知识库检索, query={}", query)
+    db = ICBCVectorDB()
+    results = await db.asearch_egg_info(query, limit=2)
     
+    if not results:
+      return "【信息】: 知识库中未查到与该鸡蛋提问相匹配的详细说明。"
+
+    formatted_results = []
+    for item in results:
+      formatted_results.append(f"【参考知识】: {item['content']}")
+      
+    return "\n\n".join(formatted_results)
+    
+  except Exception as e:
+    _log.error("查询鸡蛋知识库失败: {}", str(e))
+    return f"【工具报错】: 检索鸡蛋知识库时出现异常: {str(e)}"
+        
 # --- 1. 定义工具集 (Tools) ---
+@tool(args_schema=IssueEggVoucherSchema)
+async def issue_egg_voucher(runtime: Annotated[ToolRuntime, InjectedToolArg]) -> str:
+  """
+  发放宜凤园土鸡蛋超级代金券。
+  当用户表达想要、同意领取代金券（如“想要”、“好的”、“领一张”）时调用此工具。
+
+  Returns:
+    JSON字符串，包含发放结果。
+    成功示例：{"code": 0, "message": "发放成功"}
+    失败示例：{"code": 1, "message": "发放失败"}
+  """
+  configurable = runtime.config.get("configurable", {})
+  openid = configurable.get("thread_id")
+  _log.info(f"issue_egg_voucher: 开始为 openid={openid} 发放鸡蛋代金券")
+  if not openid:
+    _log.error("issue_egg_voucher: 未能从 runtime 中获取到有效的 thread_id/openid")
+    return json.dumps({"code": 1, "message": "Openid错误"}, ensure_ascii=False)
+
+  return await pinle_issue_egg_voucher(openid)
+  
 @tool(args_schema=CreateVoucherOrderSchema)
 async def create_voucher_order(total_points: int, vouchers: List[VoucherItem], runtime: Annotated[ToolRuntime, InjectedToolArg]) -> str:
   """

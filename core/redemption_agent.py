@@ -60,6 +60,8 @@ from core.llm_tools import (
   vector_search_wechat_products,
   query_voucher_order_status,
   create_voucher_order,
+  issue_egg_voucher,
+  query_egg_info,
   route_back_to_router,
   route_to_goods_exchange,
   route_to_points_exchange,
@@ -127,6 +129,8 @@ class RedemptionAgent:
       query_icbc_voucher_rules,
       query_voucher_order_status,
       create_voucher_order,
+      issue_egg_voucher,
+      query_egg_info,
       route_back_to_router,
       route_to_customer_service,
       route_to_goods_exchange,
@@ -142,8 +146,8 @@ class RedemptionAgent:
     
     self.agent_tools_config = {
       "router": [route_to_points_exchange,route_to_goods_exchange,route_to_customer_service], # 路由网关
-      "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities,route_back_to_router],
-      "points_exchange": [create_voucher_order,route_back_to_router],
+      "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities,issue_egg_voucher,query_egg_info,route_back_to_router],
+      "points_exchange": [create_voucher_order,issue_egg_voucher,query_egg_info, route_back_to_router],
       "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products,get_points_activities,route_back_to_router] # 商品导购也可以查询攒豆活动，作为辅助信息
     }
     
@@ -566,9 +570,9 @@ class RedemptionAgent:
                 display_answer = raw_text
               
               # ========== 增加额外内容 ==========
-              full_state = await self.app.aget_state(config_dict)
-              full_messages = full_state.values.get("messages",[]) if full_state and full_state.values else messages
-              display_answer = self.attach_extra_msg(full_messages, node_name, display_answer,user_id)
+              #full_state = await self.app.aget_state(config_dict)
+              #full_messages = full_state.values.get("messages",[]) if full_state and full_state.values else messages
+              #display_answer = self.attach_extra_msg(full_messages, node_name, display_answer,user_id)
               
               has_sent_final_answer = True
               await websocket.send_json({

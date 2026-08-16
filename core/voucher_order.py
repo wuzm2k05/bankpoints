@@ -8,6 +8,33 @@ import config.config as config
 
 from typing import Dict, List, Annotated
 
+async def pinle_issue_egg_voucher(openid:str) -> str:
+  """
+  发放宜凤园土鸡蛋超级代金券。
+  当用户表达想要、同意领取代金券（如“想要”、“好的”、“领一张”）时调用此工具。
+
+  Returns:
+    JSON字符串，包含发放结果。
+    成功示例：{"code": 0, "message": "发放成功"}
+    失败示例：{"code": 1, "message": "发放失败"}
+  """
+  url = "https://www.pinlenet.com.cn/jifen/distri/13/send"
+  params = {
+      "openid": openid,
+      "code": "P901"
+  }
+
+  try:
+    async with httpx.AsyncClient() as client:
+      response = await client.get(url, params=params, timeout=10.0)
+      res_json = response.json()
+      _log.debug(f"issue_egg_voucher 接口返回: {res_json}")
+      return json.dumps(res_json, ensure_ascii=False)
+        
+  except Exception as e:
+    _log.error(f"issue_egg_voucher 请求异常: {str(e)}")
+    return json.dumps({"code": 1, "message": f"代金券发放接口调用失败: {str(e)}"}, ensure_ascii=False)
+
 class VoucherOrder(metaclass=SingletonMeta):
   def __init__(self):
     self.salt = config.get_voucher_order_salt()
