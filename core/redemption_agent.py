@@ -458,11 +458,40 @@ class RedemptionAgent:
     # -------------------------------------------------------------
     # 场景 A：立减金下单完成（检查倒数第二条消息 messages[-2] 是否为下单工具返回）
     # -------------------------------------------------------------
-    if node_name == "points_exchange_node":    
+    if node_name == "points_exchange_node":
       if msg_type == "tool" and tool_name == "create_voucher_order":
+        # 工具调用失败（如 code=1、接口异常）时返回 False，不视为成功下单
+        content = getattr(prev_msg, "content", "") or (prev_msg.get("content") if isinstance(prev_msg, dict) else "")
+        if not self._is_tool_success(content):
+          _log.info("🎯 [广告推送] create_voucher_order 工具调用失败，不推送广告/发券")
+          return False
         _log.info("🎯 [广告推送] 倒数第二条消息匹配到 create_voucher_order 的 ToolMessage，立减金下单成功，准备推送广告！")
         return True
-    
+
+    return False
+
+  def _is_tool_success(self, content: Any) -> bool:
+    """
+    解析工具返回内容，判断业务调用是否成功（code==0）。
+    支持 JSON 字符串或结构体。
+    """
+    if isinstance(content, str):
+      if '"code": 0' in content or '"code":0' in content:
+        return True
+      try:
+        data = json.loads(content)
+        return isinstance(data, dict) and data.get("code") == 0
+      except Exception:
+        return False
+    elif isinstance(content, list):
+      try:
+        data = content[0]
+        data = getattr(data, "additional_kwargs", {}).get("parsed", data)
+        return isinstance(data, dict) and data.get("code") == 0
+      except Exception:
+        return False
+    elif isinstance(content, dict):
+      return content.get("code") == 0
     return False
   
   """    
