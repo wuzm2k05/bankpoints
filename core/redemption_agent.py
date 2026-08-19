@@ -62,8 +62,7 @@ from core.llm_tools import (
   vector_search_wechat_products,
   query_voucher_order_status,
   create_voucher_order,
-  issue_egg_voucher,
-  query_egg_info,
+  issue_custom_voucher,
   route_back_to_router,
   route_to_goods_exchange,
   route_to_points_exchange,
@@ -131,8 +130,7 @@ class RedemptionAgent:
       query_icbc_voucher_rules,
       query_voucher_order_status,
       create_voucher_order,
-      issue_egg_voucher,
-      query_egg_info,
+      issue_custom_voucher,
       route_back_to_router,
       route_to_customer_service,
       route_to_goods_exchange,
@@ -149,7 +147,7 @@ class RedemptionAgent:
     self.agent_tools_config = {
       "router": [route_to_points_exchange,route_to_goods_exchange,route_to_customer_service], # 路由网关
       "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities,route_back_to_router],
-      "points_exchange": [create_voucher_order, route_back_to_router],
+      "points_exchange": [create_voucher_order, issue_custom_voucher, route_back_to_router],
       "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products,get_points_activities,route_back_to_router] # 商品导购也可以查询攒豆活动，作为辅助信息
     }
     
@@ -581,8 +579,11 @@ class RedemptionAgent:
             if node_name in ["tools_node"]:
               msgs = output.get("messages", [])
               if msgs and isinstance(msgs[-1], ToolMessage):
-                friendly_desc = self.tool_descriptions.get(msgs[-1].name, f"正在处理...")
-                trace_msg = {"seq": seq, "type": "chat", "userCode": user_id, "status": "success", "isTrace": True, "answer": friendly_desc}
+                tool_name = msgs[-1].name
+                if tool_name in self.tool_descriptions:
+                  #TODO: right now we only send last tool description back
+                  friendly_desc = self.tool_descriptions.get(msgs[-1].name, f"正在处理...")
+                  trace_msg = {"seq": seq, "type": "chat", "userCode": user_id, "status": "success", "isTrace": True, "answer": friendly_desc}
             elif node_name in ["customer_service_node", "points_exchange_node", "goods_exchange_node"]:
               msgs = output.get("messages", [])
               if msgs and getattr(msgs[-1], 'tool_calls', None):
@@ -615,10 +616,10 @@ class RedemptionAgent:
                 display_answer = raw_text
               
               # ========== 增加额外内容 ==========
-              if node_name == "points_exchange_node":
-                full_state = await self.app.aget_state(config_dict)
-                full_messages = full_state.values.get("messages",[]) if full_state and full_state.values else messages
-                display_answer = await self.attach_extra_msg(full_messages, node_name, display_answer,user_id)
+              #if node_name == "points_exchange_node":
+              #  full_state = await self.app.aget_state(config_dict)
+              #  full_messages = full_state.values.get("messages",[]) if full_state and full_state.values else messages
+              #  display_answer = await self.attach_extra_msg(full_messages, node_name, display_answer,user_id)
                 
               has_sent_final_answer = True
               await websocket.send_json({

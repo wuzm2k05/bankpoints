@@ -60,7 +60,7 @@ class EmptyArgsSchema(BaseModel):
   class Config:
     extra = "forbid"  # 强制告诉大模型：这个工具绝对不能传入任何参数
 
-class IssueEggVoucherSchema(BaseModel):
+class IssueCustomVoucherSchema(BaseModel):
   runtime: Annotated[ToolRuntime, InjectedToolArg]
 
   model_config = ConfigDict(
@@ -99,8 +99,8 @@ async def query_egg_info(query: str) -> str:
     return f"【工具报错】: 检索鸡蛋知识库时出现异常: {str(e)}"
         
 # --- 1. 定义工具集 (Tools) ---
-@tool(args_schema=IssueEggVoucherSchema)
-async def issue_egg_voucher(runtime: Annotated[ToolRuntime, InjectedToolArg]) -> str:
+@tool(args_schema=IssueCustomVoucherSchema)
+async def issue_custom_voucher(runtime: Annotated[ToolRuntime, InjectedToolArg]) -> str:
   """
   发放宜凤园土鸡蛋超级代金券。
   当用户表达想要、同意领取代金券（如“想要”、“好的”、“领一张”）时调用此工具。
