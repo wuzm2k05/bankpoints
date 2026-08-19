@@ -159,6 +159,21 @@ class AgentTester:
     print(f"总结：运行 {len(results)} 项，通过 {passed_num} 项。")
 
 if __name__ == "__main__":
-  my_agent = RedemptionAgent()
+  import config.config as config
+  from redis.asyncio import Redis, ConnectionPool
+  from core.simple_redis_saver import SimpleRedisSaver
+
+  # 构建共享 Redis 连接（与 point_server.py 保持一致）
+  redis_pool = ConnectionPool(
+    host=config.get_token_redis_host(),
+    port=config.get_token_redis_port(),
+    db=0,
+    max_connections=config.get_max_thread_workers() * 2 or 100,
+    decode_responses=False
+  )
+  shared_redis = Redis(connection_pool=redis_pool)
+  saver = SimpleRedisSaver(redis_client=shared_redis, ttl=config.get_redis_msg_ttl_in_seconds())
+
+  my_agent = RedemptionAgent(saver=saver)
   tester = AgentTester(my_agent)
   tester.run()

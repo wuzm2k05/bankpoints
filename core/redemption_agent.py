@@ -19,6 +19,8 @@ import config.resource as resource
 from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
 
+from core.voucher_order import pinle_issue_egg_voucher
+
 #from sqldb.sqlite_respository import SQLiteGoodsRepository
 
 # Meter
@@ -146,8 +148,8 @@ class RedemptionAgent:
     
     self.agent_tools_config = {
       "router": [route_to_points_exchange,route_to_goods_exchange,route_to_customer_service], # 路由网关
-      "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities,issue_egg_voucher,query_egg_info,route_back_to_router],
-      "points_exchange": [create_voucher_order,issue_egg_voucher,query_egg_info, route_back_to_router],
+      "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities,route_back_to_router],
+      "points_exchange": [create_voucher_order, route_back_to_router],
       "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products,get_points_activities,route_back_to_router] # 商品导购也可以查询攒豆活动，作为辅助信息
     }
     
@@ -443,11 +445,29 @@ class RedemptionAgent:
         
     return answer
   """
+  def _has_voucher_order_tool_call(self,messages: List[Any], node_name: str) -> bool:
+    if not messages or len(messages) < 2:
+      return False
+    msg_type = None
+    tool_name = None
+    prev_msg = messages[-2]
+    if len(messages) >= 2:
+      msg_type = getattr(prev_msg, "type", "") or (prev_msg.get("type") if isinstance(prev_msg, dict) else "")
+      tool_name = getattr(prev_msg, "name", "") or (prev_msg.get("name") if isinstance(prev_msg, dict) else "")
+          
+    # -------------------------------------------------------------
+    # 场景 A：立减金下单完成（检查倒数第二条消息 messages[-2] 是否为下单工具返回）
+    # -------------------------------------------------------------
+    if node_name == "points_exchange_node":    
+      if msg_type == "tool" and tool_name == "create_voucher_order":
+        _log.info("🎯 [广告推送] 倒数第二条消息匹配到 create_voucher_order 的 ToolMessage，立减金下单成功，准备推送广告！")
+        return True
+    
+    return False
   
-  def _should_attach_ad(self, messages: List[Any], node_name: str) -> bool:
-    """
-    统一在此处判断是否符合广告推送条件
-    """
+  """    
+  def _should_attach_msg(self, messages: List[Any], node_name: str) -> bool:
+    
     if not self.ad_enabled or not self.ad_template or not messages:
       return False
 
@@ -457,14 +477,6 @@ class RedemptionAgent:
     if len(messages) >= 2:
       msg_type = getattr(prev_msg, "type", "") or (prev_msg.get("type") if isinstance(prev_msg, dict) else "")
       tool_name = getattr(prev_msg, "name", "") or (prev_msg.get("name") if isinstance(prev_msg, dict) else "")
-
-    # -------------------------------------------------------------
-    # 场景 A：立减金下单完成（检查倒数第二条消息 messages[-2] 是否为下单工具返回）
-    # -------------------------------------------------------------
-    if node_name == "points_exchange_node":    
-      if msg_type == "tool" and tool_name == "create_voucher_order":
-        _log.info("🎯 [广告推送] 倒数第二条消息匹配到 create_voucher_order 的 ToolMessage，立减金下单成功，准备推送广告！")
-        return True
 
     # -------------------------------------------------------------
     # 场景 B：客服/商品咨询服务办结（检查文本是否命中结束关键词）
@@ -484,15 +496,19 @@ class RedemptionAgent:
       _log.debug(f"为用户 {user_id} 追加了后缀内容")
     
     return display_answer
+  """
                     
-  def attach_extra_msg(self, messages: List[Any], node_name: str, display_answer: str, user_id: str) -> str:
-    if self._should_attach_ad(messages, node_name):
-      formatted_ad = self.ad_template.format(user_id=user_id)
-      display_answer = f"{display_answer}\n\n{formatted_ad}"      
-      _log.debug(f"为节点 {node_name} 追加了广告模板内容: {display_answer}")
-    
-    display_answer = self.attach_user_suffix_if_needed(messages, node_name, display_answer, user_id)
-    
+  async def attach_extra_msg(self, messages: List[Any], node_name: str, display_answer: str, user_id: str) -> str:
+    # 立减金下单成功后，自动发放一枚鸡蛋代金券，并在回复末尾追加感谢文案
+    if self._has_voucher_order_tool_call(messages, node_name):
+      result = await pinle_issue_egg_voucher(user_id)
+      try:
+        data = json.loads(result) if isinstance(result, str) else result
+      except Exception:
+        data = {}
+      if isinstance(data, dict) and data.get("code") == 0:
+        display_answer = f"{display_answer}\n\n为感谢您兑换立减金，系统已为您自动发放了一张宜凤园富硒散养土鸡蛋超级代金券，可在微信卡包内直接使用。"
+        _log.info(f"🎯 [代金券] 节点 {node_name} 立减金兑换成功，自动发放鸡蛋代金券并追加感谢文案")
     return display_answer
     
   # ========== 新增：获取用户后缀内容的方法 ==========
@@ -570,10 +586,11 @@ class RedemptionAgent:
                 display_answer = raw_text
               
               # ========== 增加额外内容 ==========
-              #full_state = await self.app.aget_state(config_dict)
-              #full_messages = full_state.values.get("messages",[]) if full_state and full_state.values else messages
-              #display_answer = self.attach_extra_msg(full_messages, node_name, display_answer,user_id)
-              
+              if node_name == "points_exchange_node":
+                full_state = await self.app.aget_state(config_dict)
+                full_messages = full_state.values.get("messages",[]) if full_state and full_state.values else messages
+                display_answer = await self.attach_extra_msg(full_messages, node_name, display_answer,user_id)
+                
               has_sent_final_answer = True
               await websocket.send_json({
                 "seq": seq, "type": "chat", "userCode": user_id, "status": "success", "isTrace": False, "answer": display_answer
