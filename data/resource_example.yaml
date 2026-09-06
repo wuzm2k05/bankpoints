@@ -26,6 +26,12 @@ default_values:
   egg_voucher_config:
     enabled: true
 
+  # 立减金兑换总开关（可回切）
+  # enabled: true  -> 正常：points 房走 LLM，支持立减金兑换（线上现状）
+  # enabled: false -> 关闭：一旦进 points 房，不调 LLM，硬编码告知“暂时不支持兑换立减金”，并交还 router 让用户去别处
+  coupon_redeem_config:
+    enabled: true
+
   agent_models:
     router: "deepseek-flash"
     customer_service: "deepseek-flash"

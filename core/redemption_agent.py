@@ -104,6 +104,13 @@ class RedemptionAgent:
     self._points_prompt_key = "POINTS_EXCHANGE_AGENT_PROMPT" if self.egg_voucher_enabled else "POINTS_EXCHANGE_AGENT_PROMPT_NO_EGG"
     _log.info("鸡蛋券发放开关 egg_voucher_enabled={}，points 房间使用 prompt key={}", self.egg_voucher_enabled, self._points_prompt_key)
 
+    # ========== 加载立减金兑换开关（可回切） ==========
+    # enabled: true  -> 正常：points 房走 LLM，支持立减金兑换
+    # enabled: false -> 关闭：一旦进 points 房，不调 LLM，硬编码告知“暂时不支持兑换立减金”，并交还 router
+    redeem_cfg = config_resource.get("coupon_redeem_config", {})
+    self.coupon_redeem_enabled = redeem_cfg.get("enabled", True)
+    _log.info("立减金兑换开关 coupon_redeem_enabled={}", self.coupon_redeem_enabled)
+
     # ========== 加载广告推送配置 ==========
     ad_config = config_resource.get("ad_push_config", {})
     self.ad_enabled = ad_config.get("enabled", True)
@@ -235,6 +242,18 @@ class RedemptionAgent:
       return await self._process_agent_node(state, "customer_service")
 
     async def points_exchange_node_fn(state):
+      # 回切开关关闭时：立减金兑换整体下架。
+      # 不调用 LLM，硬编码告知“暂不支持”；并把 current_agent 置回 router，
+      # 使用户下一条消息能从 router_node 重判意图(可去客服等)，不至于被困死在 points —— 避免死循环。
+      if not self.coupon_redeem_enabled:
+        _log.info("立减金兑换已关闭，拦截 points_exchange 房间(不调 LLM)")
+        return {
+          "current_agent": "router",   # 关键：交还入口研判，避免下轮被快车道拽回 points
+          "messages": [AIMessage(content=(
+            "抱歉，立减金兑换功能目前暂未开放，暂时不支持将 i豆 兑换为微信立减金。"
+            "请问还有什么可以帮您的？比如查询立减金订单状态、了解攒豆攻略，或咨询商城商品比价。"
+          ))]
+        }
       return await self._process_agent_node(state, "points_exchange")
 
     async def goods_exchange_node_fn(state):
