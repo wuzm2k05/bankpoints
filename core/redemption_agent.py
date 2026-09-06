@@ -95,7 +95,15 @@ class RedemptionAgent:
     }
     
     config_resource = resource.get_resource()["default_values"]
-    
+
+    # ========== 加载鸡蛋券发放开关 ==========
+    # enabled: true  -> 用 POINTS_EXCHANGE_AGENT_PROMPT（含发券话术），房间绑定 issue_custom_voucher
+    # enabled: false -> 用 POINTS_EXCHANGE_AGENT_PROMPT_NO_EGG（无发券话术），房间不绑定 issue_custom_voucher
+    egg_cfg = config_resource.get("egg_voucher_config", {})
+    self.egg_voucher_enabled = egg_cfg.get("enabled", True)
+    self._points_prompt_key = "POINTS_EXCHANGE_AGENT_PROMPT" if self.egg_voucher_enabled else "POINTS_EXCHANGE_AGENT_PROMPT_NO_EGG"
+    _log.info("鸡蛋券发放开关 egg_voucher_enabled={}，points 房间使用 prompt key={}", self.egg_voucher_enabled, self._points_prompt_key)
+
     # ========== 加载广告推送配置 ==========
     ad_config = config_resource.get("ad_push_config", {})
     self.ad_enabled = ad_config.get("enabled", True)
@@ -111,7 +119,7 @@ class RedemptionAgent:
     # 2. 动态拼接各个子 Agent 的专属提示词 (追加全局规范)
     router_agent_system_prompt = self._replace_prompt_variables(config_resource['ROUTER_AGENT_PROMPT'])
     customer_service_agent_system_prompt = self._replace_prompt_variables(config_resource['CUSTOMER_SERVICE_AGENT_PROMPT'])
-    points_exchange_agent_system_prompt = self._replace_prompt_variables(config_resource['POINTS_EXCHANGE_AGENT_PROMPT'])
+    points_exchange_agent_system_prompt = self._replace_prompt_variables(config_resource[self._points_prompt_key])
     goods_exchange_agent_system_prompt = self._replace_prompt_variables(config_resource['GOODS_EXCHANGE_AGENT_PROMPT'])
     
     self.slide_window = config_resource['agent_settings']['slide_window']
@@ -130,13 +138,15 @@ class RedemptionAgent:
       query_icbc_voucher_rules,
       query_voucher_order_status,
       create_voucher_order,
-      issue_custom_voucher,
       route_back_to_router,
       route_to_customer_service,
       route_to_goods_exchange,
       route_to_points_exchange
     ]
-    
+    # 开关关闭时，不把 issue_custom_voucher 注册进工具池，杜绝发券调用
+    if self.egg_voucher_enabled:
+      self.tools.append(issue_custom_voucher)
+
     self.route_tool_names = [
       "route_back_to_router",
       "route_to_customer_service",
@@ -147,7 +157,9 @@ class RedemptionAgent:
     self.agent_tools_config = {
       "router": [route_to_points_exchange,route_to_goods_exchange,route_to_customer_service], # 路由网关
       "customer_service": [query_icbc_voucher_rules, query_voucher_order_status, get_points_activities,route_back_to_router],
-      "points_exchange": [create_voucher_order, issue_custom_voucher, route_back_to_router],
+      # 开关关闭时 points 房间不绑定 issue_custom_voucher，模型无法发起发券调用
+      "points_exchange": ([create_voucher_order, route_back_to_router]
+                          + ([issue_custom_voucher] if self.egg_voucher_enabled else [])),
       "goods_exchange": [vector_search_icbc_mall, vector_search_wechat_products,get_points_activities,route_back_to_router] # 商品导购也可以查询攒豆活动，作为辅助信息
     }
     
