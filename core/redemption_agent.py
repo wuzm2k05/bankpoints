@@ -358,13 +358,6 @@ class RedemptionAgent:
       start_on="human",              # 核心参数：截断后的第一条消息必须是用户发言，自动清理前面残留的孤立 ToolMessage/AIMessage
     )
     
-    """
-    if len(safe_messages) > self.slide_window:
-      truncated_messages = safe_messages[-self.slide_window:]
-    else:
-      truncated_messages = safe_messages
-    """
-    
     base_messages = [self.agent_system_prompts[current_agent_name]] + truncated_messages
     _log.debug(f"送给llm的真正messages: {base_messages}")
     
