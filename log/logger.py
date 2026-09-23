@@ -24,7 +24,6 @@ def setup_logger():
   log_level = _level_map.get(config.get_log_level().lower().strip(), "INFO")
   log_file = config.get_log_file_name()
   max_size = config.get_log_backup_file_size()
-  backup_num = config.get_log_backup_file_num()
   destination = config.get_log_destination().strip().split(',')
 
   # 3. 基础格式：包含进程 ID (PID)，这在多进程 WSS 中至关重要

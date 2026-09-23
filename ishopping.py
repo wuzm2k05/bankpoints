@@ -1,20 +1,25 @@
 import asyncio,traceback
 import ssl
-import pathlib
-#import websockets
-from aiohttp import web
 
+from redis.asyncio import Redis, ConnectionPool
 from config import config
 import log.logger
 from core.redemption_agent import RedemptionAgent
+from core.simple_redis_saver import SimpleRedisSaver
 
 _log = log.logger.get_logger()
 
 async def main():
   # --- 3. 测试运行 ---
 
-  agent = RedemptionAgent()
-  
+  redis_pool = ConnectionPool.from_url(
+    f"redis://{config.get_token_redis_host()}:{config.get_token_redis_port()}/0",
+    decode_responses=False
+  )
+  shared_redis = Redis(connection_pool=redis_pool)
+  saver = SimpleRedisSaver(redis_client=shared_redis, ttl=config.get_redis_msg_ttl_in_seconds())
+  agent = RedemptionAgent(saver=saver)
+
   while True:
     user_input = input("请输入您的问题（输入 'exit' 退出）: ")
     if user_input.lower() == 'exit':

@@ -7,8 +7,7 @@ from pydantic import BaseModel,Field
 from loguru import logger as _log
 
 # 异步组件导入
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage,RemoveMessage, trim_messages
-from langchain_core.runnables import RunnableConfig
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage, trim_messages
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
@@ -20,8 +19,6 @@ from core import model_factory
 from core.simple_redis_saver import SimpleRedisSaver
 
 from core.voucher_order import pinle_issue_egg_voucher
-
-#from sqldb.sqlite_respository import SQLiteGoodsRepository
 
 # Meter
 from opentelemetry import metrics
@@ -430,43 +427,6 @@ class RedemptionAgent:
               
     return history
   
-  """
-  def add_recommendation_products(self,answer):
-    if not answer or not answer.strip():
-      return answer
-
-    # 1. 研判是否命中办理完成的结束语
-    is_completed = any(kw in answer for kw in self.completion_keywords)
-    
-    if is_completed:
-      _log.info("🎯 检测到回复中包含结束/办结关键词，尝试从 SQLite 提取推荐商品...")
-      recommend_text = ""
-      
-      try:
-        # 2. 实例化你的 SQLite 仓库（不传参，自动加载路径）
-        repo = SQLiteGoodsRepository()
-        
-        # 3. 直接调用你已有的同步类函数 _sync_query，只取 1 条记录
-        goods_list = repo._sync_query(product_id=None, limit=1)
-        
-        if goods_list:
-          item = goods_list[0]
-          desc = item.get("description") or desc
-          link = item.get("link") or link
-          _log.info(f"🎉 成功通过 Repository 类函数读取到推荐商品: {desc}")
-          recommend_text = (
-            f"\n\n---\n"
-            f"💡 **为您推荐**：如果您有闲置积分或想寻找超值优惠，"
-            f"可以看看我们为您精选的 [{desc}]({link})，点击链接即可直接前往体验哦！"
-          )
-          
-      except Exception as e:
-        _log.error(f"从 SQLite 提取推荐商品失败 (将使用默认兜底): {e}")
-      
-      return f"{answer}{recommend_text}"
-        
-    return answer
-  """
   def _has_voucher_order_tool_call(self,messages: List[Any], node_name: str) -> bool:
     if not messages or len(messages) < 2:
       return False
@@ -515,40 +475,7 @@ class RedemptionAgent:
     elif isinstance(content, dict):
       return content.get("code") == 0
     return False
-  
-  """    
-  def _should_attach_msg(self, messages: List[Any], node_name: str) -> bool:
-    
-    if not self.ad_enabled or not self.ad_template or not messages:
-      return False
-
-    msg_type = None
-    tool_name = None
-    prev_msg = messages[-2]
-    if len(messages) >= 2:
-      msg_type = getattr(prev_msg, "type", "") or (prev_msg.get("type") if isinstance(prev_msg, dict) else "")
-      tool_name = getattr(prev_msg, "name", "") or (prev_msg.get("name") if isinstance(prev_msg, dict) else "")
-
-    # -------------------------------------------------------------
-    # 场景 B：客服/商品咨询服务办结（检查文本是否命中结束关键词）
-    # -------------------------------------------------------------
-    if node_name in ["customer_service_node"]:
-      if msg_type == "tool" and tool_name not in ("route_back_to_router","route_to_goods_exchange","route_to_points_exchange","route_to_customer_service"):
-        # we have tool call previous msg, so add ad here
-        _log.info(f"🎯 [广告推送] 节点 {node_name} 命中办结关键词，准备推送广告！")
-        return True
-
-    return False
-  
-  def attach_user_suffix_if_needed(self, messages: List[Any], node_name: str, display_answer: str, user_id: str) -> str:
-    user_suffix = self.get_user_suffix(user_id)
-    if user_suffix:
-      display_answer = f"{display_answer}\n\n{user_suffix}"
-      _log.debug(f"为用户 {user_id} 追加了后缀内容")
-    
-    return display_answer
-  """
-                    
+        
   async def attach_extra_msg(self, messages: List[Any], node_name: str, display_answer: str, user_id: str) -> str:
     # 立减金下单成功后，自动发放一枚鸡蛋代金券，并在回复末尾追加感谢文案
     if self._has_voucher_order_tool_call(messages, node_name):

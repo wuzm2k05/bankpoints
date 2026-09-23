@@ -1,6 +1,4 @@
 import yaml
-import aiofiles
-import util.util as util
 
 from . import config
 import log.logger as logger
