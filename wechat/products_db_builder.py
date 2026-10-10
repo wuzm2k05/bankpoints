@@ -209,7 +209,11 @@ async def sync_task():
       already_done_today = (last_sync_date == today)
 
       should_run = is_manual or (in_window and days_passed >= period_days and not already_done_today)
+      
+      # TODO：we dont need this task anymore.
+      _log.info("skip wechat talent sync task")
 
+      """
       if should_run:
         _log.info("开始执行同步任务 (触发原因: {})", "手动" if is_manual else "定时")
         success = await builder.sync_once()
@@ -223,7 +227,7 @@ async def sync_task():
           _log.debug("不在同步时间段 (当前 {}:00)，跳过", current_hour)
         else:
           _log.debug("不满足同步周期或今日已执行，跳过")
-
+      """
     except Exception as e:
       _log.error("Sync Task 调度异常: {}", e)
 
