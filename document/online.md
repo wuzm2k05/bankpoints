@@ -22,3 +22,11 @@ python tools_cmd.py egg_build
 # 1. 更改txt文件（例子在materials/voucher_knowledge.txt)
 # 2. 运行下面命令生成embedding的数据库
 python tools_cmd.py bvd <voucher_txt_file_name>
+
+# renew nginx证书
+使用下面脚本：
+```
+#!/bin/bash
+/usr/local/bin/certbot renew --deploy-hook "systemctl reload nginx"
+```
+让crontab每天运行这个脚本。注意要测试是否能用
