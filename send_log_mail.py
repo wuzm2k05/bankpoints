@@ -1,7 +1,8 @@
 import datetime
+import html
 import json
-import os
-import re
+import os,socket
+import re,ssl
 import smtplib
 import sys
 from email import encoders
@@ -31,7 +32,90 @@ RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")  # 接收人邮箱
 
 # OTel Collector 暴露的 Prometheus endpoint 地址 (例如: http://127.0.0.1:8889/metrics)
 OTEL_PROMETHEUS_URL = os.getenv("OTEL_PROMETHEUS_URL")
+
+DOMAIN_NAME = os.getenv("DOMAIN_NAME") or "ninenode.com"  # 用于检查证书剩余天数的域名
+
+# 证书剩余天数告警阈值：少于该天数时，邮件正文中的证书信息标红加粗
+CERT_WARN_DAYS = int(os.getenv("CERT_WARN_DAYS") or 20)
 # ==================================================
+
+
+def check_cert_remain_days(hostname, port=443, days_threshold=30):
+  # 1. 建立 TCP 连接并获取服务器的 SSL 证书
+  context = ssl.create_default_context()
+  with socket.create_connection((hostname, port)) as sock:
+    with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+      cert = ssock.getpeercert()
+
+  # 2. 提取证书中的过期时间字符串 (格式如: 'Oct 16 23:59:59 2026 GMT')
+  not_after_str = cert['notAfter']
+
+  # 3. 将时间字符串转换为 UTC 的 datetime 对象
+  expiry_date = datetime.datetime.strptime(
+      not_after_str, '%b %d %H:%M:%S %Y %Z'
+  ).replace(tzinfo=datetime.timezone.utc)
+
+  # 4. 获取当前带 UTC 时区的时间（替代已废弃的 utcnow）
+  now = datetime.datetime.now(datetime.timezone.utc)
+  return (expiry_date - now).days
+
+def get_cert_summary():
+  """检查域名证书剩余天数，返回 (纯文本摘要, HTML摘要, 是否告警)
+
+  证书剩余天数少于 CERT_WARN_DAYS 时，HTML 摘要中的该行标红加粗，
+  以便在邮件客户端直接看到告警。检查失败时返回一段说明文本，不抛异常。
+  """
+  if not DOMAIN_NAME:
+    return "", "", False
+
+  try:
+    remain_days = check_cert_remain_days(DOMAIN_NAME)
+  except Exception as e:
+    err_text = (
+      "==================================================\n"
+      "           🔐 域名证书到期检查\n"
+      "==================================================\n"
+      f"• 域名           : {DOMAIN_NAME}\n"
+      f"• 检查失败       : {e}\n"
+      "==================================================\n\n"
+    )
+    return err_text, f"<pre>{html.escape(err_text)}</pre>", False
+
+  is_warning = remain_days < CERT_WARN_DAYS
+  status_text = (
+    f"⚠️ 剩余 {remain_days} 天，已少于 {CERT_WARN_DAYS} 天，请尽快续期！"
+    if is_warning else f"✅ 剩余 {remain_days} 天，状态正常"
+  )
+
+  plain_text = (
+    "==================================================\n"
+    "           🔐 域名证书到期检查\n"
+    "==================================================\n"
+    f"• 域名           : {DOMAIN_NAME}\n"
+    f"• 证书剩余天数   : {remain_days} 天\n"
+    f"• 到期状态       : {status_text}\n"
+    "==================================================\n\n"
+  )
+
+  # HTML 版本：告警时把剩余天数与状态整行标红加粗
+  days_html = f"{remain_days} 天"
+  status_html = html.escape(status_text)
+  if is_warning:
+    days_html = f'<span style="color:#d93025;font-weight:bold;">{days_html}</span>'
+    status_html = f'<span style="color:#d93025;font-weight:bold;">{status_html}</span>'
+
+  html_text = (
+    "<pre style=\"font-family:Consolas,monospace;font-size:13px;\">"
+    "==================================================\n"
+    "           🔐 域名证书到期检查\n"
+    "==================================================\n"
+    f"• 域名           : {html.escape(DOMAIN_NAME)}\n"
+    f"• 证书剩余天数   : {days_html}\n"
+    f"• 到期状态       : {status_html}\n"
+    "==================================================\n\n"
+    "</pre>"
+  )
+  return plain_text, html_text, is_warning
 
 def get_last_position():
     """获取上次读取的日志文件指针位置"""
@@ -217,8 +301,12 @@ def generate_metrics_summary() -> str:
         return ""
 
 
-def send_email(attach_file_path, subject, body_text, display_filename):
-    """通用邮件发送函数"""
+def send_email(attach_file_path, subject, body_text, display_filename, body_html=None):
+    """通用邮件发送函数
+
+    body_html 不为空时，以 multipart/alternative 方式同时携带纯文本与 HTML 正文，
+    不支持 HTML 的客户端会回退显示 body_text。
+    """
     if not SENDER_PASSWD:
         print("未找到 EMAIL_PASSWORD 环境变量，无法发送邮件")
         return False
@@ -233,7 +321,15 @@ def send_email(attach_file_path, subject, body_text, display_filename):
     msg["From"] = SENDER_EMAIL
     msg["To"] = ", ".join(receiver_list)
     msg["Subject"] = subject
-    msg.attach(MIMEText(body_text, "plain", "utf-8"))
+
+    if body_html:
+        # 纯文本在前、HTML 在后，符合 multipart/alternative 的优先级约定
+        alternative = MIMEMultipart("alternative")
+        alternative.attach(MIMEText(body_text, "plain", "utf-8"))
+        alternative.attach(MIMEText(body_html, "html", "utf-8"))
+        msg.attach(alternative)
+    else:
+        msg.attach(MIMEText(body_text, "plain", "utf-8"))
 
     try:
         if attach_file_path and os.path.exists(attach_file_path):
@@ -285,8 +381,11 @@ def main():
     # 1. 计算今日净增的 Metrics 统计文本
     metrics_summary_text = generate_metrics_summary()
 
-    # 2. 判断是否有新日志或 Metrics 统计
-    if new_logs or metrics_summary_text:
+    # 2. 检查域名证书剩余到期天数（含标红告警版本）
+    cert_text, cert_html, cert_warning = get_cert_summary()
+
+    # 3. 判断是否有新日志、Metrics 统计或证书信息
+    if new_logs or metrics_summary_text or cert_text:
         attach_path = None
         email_filename = None
 
@@ -296,20 +395,37 @@ def main():
             email_filename = f"log_{today_str}.txt"
             attach_path = TEMP_ATTACH_PATH
 
-        # 3. 组装邮件标题与正文
+        # 4. 组装邮件标题与正文
         subject = f"每日运维与运行指标汇报 - {today_str}"
         body_text = f"您好！以下是今日 {today_str} 的系统运行汇总：\n\n"
 
         if metrics_summary_text:
             body_text += metrics_summary_text
 
+        body_text += cert_text
+
         if new_logs:
             body_text += f"今日产生增量日志 {len(new_logs)} 行，已打包至附件，请查收。"
         else:
             body_text += "今日无新增日志。"
 
-        # 4. 发送邮件
-        success = send_email(attach_path, subject, body_text, email_filename)
+        # 5. 组装 HTML 正文（证书告警需要富文本样式）
+        body_html = f"<div style=\"font-family:Consolas,monospace;font-size:13px;\">"
+        body_html += f"<p>您好！以下是今日 {today_str} 的系统运行汇总：</p>"
+        if metrics_summary_text:
+            body_html += f"<pre>{html.escape(metrics_summary_text)}</pre>"
+        body_html += cert_html
+        if new_logs:
+            body_html += f"<p>今日产生增量日志 {len(new_logs)} 行，已打包至附件，请查收。</p>"
+        else:
+            body_html += "<p>今日无新增日志。</p>"
+        body_html += "</div>"
+
+        if cert_warning:
+            subject += "【证书即将到期】"
+
+        # 6. 发送邮件
+        success = send_email(attach_path, subject, body_text, email_filename, body_html)
 
         if success and attach_path and os.path.exists(attach_path):
             os.remove(attach_path)
