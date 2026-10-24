@@ -167,14 +167,15 @@ def main():
   reimbursement_cost = real_cost * BUDGET_MULTIPLIER
 
   # 组装给财务报销方的邮件内容
-  subject = f"【财务报销】玖结点公司调用 DeepSeek API 月度消费账单 ({last_date_str} 至 {today_str})"
+  subject = f"【财务报销】玖结点公司月度账单 ({last_date_str} 至 {today_str})"
   body_text = (
     f"拼乐公司财务及报销相关负责人，您好：\n\n"
-    f"以下为您推送上一个周期玖结点公司调用 DeepSeek API 官方接口实际消费对账数据（已包含额外调整额度），请查收：\n"
+    #f"以下为您推送上一个周期玖结点公司调用 DeepSeek API 官方接口实际消费对账数据（已包含额外调整额度），请查收：\n"
     f"------------------------------------\n"
     f" 统计周期 : {last_date_str} 至 {today_str}\n"
-    f" 应报销总金额: {reimbursement_cost:.2f} 元 (CNY)  <-- (已包含 150% 额度调整)\n"
-    f" 实际消耗参考: {real_cost:.2f} 元 (CNY)\n"
+    #f" 应报销总金额: {reimbursement_cost:.2f} 元 (CNY)  <-- (已包含 150% 额度调整)\n"
+    f" 应报销总金额: 500 元 (CNY) \n"
+    #f" 实际消耗参考: {real_cost:.2f} 元 (CNY)\n"
     f" 清算时间 : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
     f"------------------------------------\n\n"
     f"玖结点公司开户银行：招商银行 北京雍和宫支行\n\n"
