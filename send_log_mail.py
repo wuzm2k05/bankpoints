@@ -379,7 +379,8 @@ def main():
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
 
     # 1. 计算今日净增的 Metrics 统计文本
-    metrics_summary_text = generate_metrics_summary()
+    #metrics_summary_text = generate_metrics_summary()
+    metrics_summary_text = ""
 
     # 2. 检查域名证书剩余到期天数（含标红告警版本）
     cert_text, cert_html, cert_warning = get_cert_summary()
